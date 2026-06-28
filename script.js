@@ -1,5 +1,7 @@
 'use strict';
 
+const APP_VERSION = 'V3.2 Survivor Bridge';
+
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {
@@ -53,6 +55,7 @@ function init(){
   bindEvents();
   updateSourceCard();
   updateCounter();
+  try{ $('modelPill').textContent = APP_VERSION; }catch(_){}
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -555,7 +558,7 @@ function buildModel(rows, market){
   });
 
   /*
-    FORMULA V2
+    FORMULA DASAR
     Kelemahan V1: digit yang kuat secara historis tetapi sedang dingin terlalu turun.
     V2 menambah lima pembaca pola:
     1. reboundScore: digit historis kuat yang absen 2-8 draw terakhir.
@@ -587,17 +590,19 @@ function buildModel(rows, market){
 
   const score = DIGITS.map(d => {
     /*
-      FORMULA V3.1
+      FORMULA V3.2 SURVIVOR BRIDGE
       Fokus utama tetap digit bebas posisi, bukan tebak urutan.
       Position Score menjadi pembisik kecil.
-      Survivor Carry ditambahkan agar digit tunggal dari draw terakhir yang masih sehat tidak terlalu cepat dibuang.
+      Survivor Carry benar-benar masuk ke skor final.
+      Repair Survivor menjaga digit 1/3 agar tidak kalah oleh bridge spekulatif seperti 2.
     */
-    return 0.36*oldScore[d] +
-      0.23*reboundScore[d] +
-      0.15*neighborScore[d] +
-      0.12*shapeScore[d] +
+    return 0.34*oldScore[d] +
+      0.21*reboundScore[d] +
+      0.14*neighborScore[d] +
+      0.11*shapeScore[d] +
       0.04*positionScore[d] +
-      0.10*antiScore[d];
+      0.09*antiScore[d] +
+      0.07*survivorScore[d];
   });
   const normalizedScore = normalizeArray(score);
   const classMap = classifyDigits(presence);
@@ -976,6 +981,7 @@ function chooseFinalDigits(score, ctx){
   // Tujuan: menjaga minimal 3 digit masuk, bukan mengejar satu modul yang terlalu agresif.
   repairWeakBridge(selected, score, ctx);
   forceStrongSurvivorAfterTwin(selected, score, ctx);
+  repairSurvivorAndStable(selected, score, ctx);
 
   // Fallback bila data terlalu pendek.
   DIGITS.slice().sort((a,b) => score[b] - score[a]).forEach(d => {
@@ -1308,7 +1314,7 @@ function sourceBadge(status){
 
 function makePlainReport(r){
   return [
-    `Dashboard Riset Pola Keluaran Resmi Multi Pasaran`,
+    `Dashboard Riset Pola Keluaran Resmi Multi Pasaran - V3.2 Survivor Bridge`,
     `Market: ${r.marketLabel}`,
     `Data: ${r.N} baris`,
     `Latest: ${r.latestDraw}`,
