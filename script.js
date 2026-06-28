@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.2 • Slow Formula Audit';
+const APP_VERSION = 'IPHOEL Formula Engine V4.3 • Day Anchor Lock';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -126,12 +126,15 @@ function buildFormulaPrediction(rows){
   const learnedDay = learnDayFormulaWeights(chrono, formulas, latest.day);
   const learnedWeekLatest = learnWeekFormulaWeights(chrono, formulas, latest.day);
   const learnedWeekTarget = learnWeekFormulaWeights(chrono, formulas, targetDay);
+  const targetAnchor = findTargetDayAnchor(rows, targetDay);
   const candidate = scoreCurrent(latest, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget);
+  applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
+  audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
   audit.process = buildProcessCards(rows, formulas);
-  return {rows, latest, targetDay, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, audit};
+  return {rows, latest, targetDay, targetAnchor, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, audit};
 }
 
 function buildFormulaLibrary(){
@@ -250,6 +253,66 @@ function learnWeekFormulaWeights(chrono, formulas, day){
   return learned;
 }
 
+
+function findTargetDayAnchor(rows, targetDay){
+  if(!targetDay || targetDay === '-') return null;
+  // rows tersusun terbaru ke terlama. Ambil hari target terakhir sebelum draw berikutnya.
+  return rows.find(r => r.day === targetDay) || null;
+}
+
+function addCandidateTrace(candidate, d, amount, name, family){
+  if(d < 0 || d > 9) return;
+  candidate.score[d] += amount;
+  candidate.digitTrace[d].push({name, family, key:amount});
+  candidate.familyScore[family] = candidate.familyScore[family] || Array(10).fill(0);
+  candidate.familyScore[family][d] += amount;
+}
+
+function applyTargetDayAnchor(candidate, anchor, formulas, latest){
+  candidate.targetAnchor = anchor || null;
+  candidate.targetAnchorScore = Array(10).fill(0);
+  candidate.targetAnchorMust = [];
+  candidate.targetAnchorForce = false;
+  if(!anchor) return;
+
+  const latestCounts = countMap(latest?.digits || []);
+  const boundaryTwin = Object.keys(latestCounts).map(Number).some(d => latestCounts[d] >= 2 && (d === 9 || d === 0));
+  candidate.targetAnchorForce = boundaryTwin;
+  const factor = boundaryTwin ? 1 : 0.22;
+
+  const addAnchor = (digits, amount, name, family='targetDay') => {
+    uniqueDigits(digits).forEach(d => {
+      const power = Math.round(amount * factor);
+      candidate.targetAnchorScore[d] += power;
+      addCandidateTrace(candidate, d, power, name, family);
+    });
+  };
+
+  // V4.3: angka hari target terakhir bukan hanya pembobot pekanan.
+  // Ia menjadi sumber operasi sendiri. Contoh: Minggu terakhir 4113 membuka 4,1,3, dan 9.
+  addAnchor(anchor.digits, 96, `Target-day carry ${anchor.day} ${anchor.digits.join('')}`);
+  addAnchor(flat(anchor.digits.map(d => [mod10(9-d), mod10(10-d)])), 54, 'Target-day mirror 9/10');
+  addAnchor(singlePairGateDigits(anchor), 50, 'Target-day gerbang pasangan');
+  addAnchor(dayPairShiftDigits(anchor), 38, 'Target-day shift hari');
+  const root = digitalRoot(sumDigits(anchor));
+  addAnchor([root, mod10(root+6), mod10(root+4), mod10(9-root), mod10(10-root)], 46, 'Target-day root lock');
+  addAnchor(twinSplitDigits(anchor).concat(twinMirrorSingleDigits(anchor)), 32, 'Target-day pecah/cermin kembar');
+
+  // Kunci wajib: carry anchor dan root anchor. Ini menjaga 4 dan 9 pada kasus Minggu 4113 → 4139.
+  candidate.targetAnchorMust = uniqueDigits(anchor.digits.concat([root, mod10(10-root)])).slice(0,6);
+}
+
+function buildTargetAnchorAudit(anchor, formulas){
+  if(!anchor) return null;
+  return {
+    title:`Kunci hari target terakhir: ${anchor.day || '-'} ${anchor.digits.join('')}`,
+    carry:anchor.digits.join(' '),
+    mirror:uniqueDigits(flat(anchor.digits.map(d => [mod10(9-d), mod10(10-d)]))).join(' '),
+    gate:singlePairGateDigits(anchor).join(' '),
+    root:String(digitalRoot(sumDigits(anchor)))
+  };
+}
+
 function scoreCurrent(latest, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget){
   const score = Array(10).fill(0);
   const formulaHits = [];
@@ -328,6 +391,7 @@ function chooseFormulaDigits(candidate, latest){
   repairNarrowTrace(selected, candidate);
   forceOperationRescue(selected, latest, candidate);
   forceTwinSplitRescue(selected, latest, candidate);
+  forceTargetDayAnchorRescue(selected, candidate);
   return selected.slice(0,6).sort((a,b) => candidate.score[b] - candidate.score[a] || a-b);
 }
 
@@ -446,6 +510,28 @@ function forceTwinSplitRescue(selected, latest, candidate){
   });
 }
 
+
+function forceTargetDayAnchorRescue(selected, candidate){
+  if(!candidate.targetAnchorForce) return;
+  const must = candidate.targetAnchorMust || [];
+  const anchorScore = candidate.targetAnchorScore || Array(10).fill(0);
+  if(!must.length) return;
+
+  // V4.3: boundary twin lock.
+  // Saat latest punya kembar 9/0, hari target terakhir menjadi jangkar kuat.
+  // Contoh: Sabtu 9890, target Minggu. Minggu terakhir 4113 membuka 4,1,3,9.
+  const required = must.slice(0,4);
+  required.forEach(d => {
+    if(selected.includes(d)) return;
+    const victim = selected.slice()
+      .filter(x => !required.includes(x))
+      .sort((a,b) => (anchorScore[a] || 0) - (anchorScore[b] || 0) || candidate.score[a] - candidate.score[b])[0];
+    if(victim == null) return;
+    selected[selected.indexOf(victim)] = d;
+  });
+}
+
+
 function formulaMustHave(latest){
   const a = latest.digits;
   const out = [];
@@ -486,28 +572,33 @@ function chooseTwinDigit(candidate, finalDigits, latest){
     const families = new Set(formulaByDigit[d].map(x => x.family));
     score[d] += candidate.score[d];
     score[d] += 8 * families.size;
+    score[d] += 0.45 * ((candidate.targetAnchorScore || [])[d] || 0);
   });
   const a = latest.digits;
   const counts = countMap(a);
   const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
   if(twins.length){
     const singles = a.filter(d => !twins.includes(d));
-    if(singles.length >= 2){
-      const singleSum = mod10(singles.reduce((s,d) => s+d, 0));
-      return singleSum;
-    }
+    const singleSum = singles.length >= 2 ? mod10(singles.reduce((s,d) => s+d, 0)) : null;
+
+    // V4.3: high-boundary twin retention.
+    // Jika kembar terbaru adalah 9 atau 0, jangan otomatis pecah ke jumlah tunggal.
+    // Kasus 9890 → 4139 menunjukkan 99 bisa bertahan sebagai kandidat kembar.
+    if(twins.some(t => t === 9 || t === 0)) return twins.find(t => t === 9 || t === 0);
+
+    // Jika jumlah tunggal punya dukungan rumus, pakai seperti V4.1: 1484 → 99.
+    if(singleSum != null) return singleSum;
+
     twins.forEach(t => {
       score[mod10(t+t)] += 220;
       score[0] += 140;
       singles.forEach(s => { score[mod10(10-s)] += 160; score[mod10(9-s)] += 120; });
     });
   }else{
-    // Jika draw terakhir tidak kembar, kandidat kembar sering lahir dari gerbang pasangan kanan.
     return mod10(a[2]+a[3]);
   }
   const directSeeds = [mod10(a[0]+a[1]), mod10(a[1]+a[2]), mod10(a[2]+a[3]), mod10(a[0]+a[3]), digitalRoot(sumDigits(latest)), mod10(9-digitalRoot(sumDigits(latest)))];
   directSeeds.forEach(d => score[d] += 12);
-  // Kandidat kembar tidak harus terkunci di 6 digit utama. Ia boleh berdiri sebagai hasil rumus tersendiri.
   return DIGITS.slice().sort((x,y) => score[y] - score[x] || x-y)[0];
 }
 
@@ -541,7 +632,7 @@ function buildSlowStages(rows){
   return [
     {title:'Tahap 1 • Menyusun kronologi', icon:'①', delay:850, desc:`Membaca ${rows.length} baris dari data paling lama ke paling baru.`, items:earlyPairs},
     {title:'Tahap 2 • Membaca transisi harian', icon:'②', delay:980, desc:'Menguji rumus dari satu hari ke hari berikutnya. App mencari operasi yang pernah menembus draw sesudahnya.', items:recentPairs},
-    {title:'Tahap 3 • Membaca hari yang sama per pekan', icon:'③', delay:980, desc:'Menguji relasi seperti Senin ke Senin, Jumat ke Jumat, dan target hari berikutnya. Ini bukan persen, tetapi jejak rumus antar pekan.', items:weekPairs.length ? weekPairs : ['Belum cukup pasangan hari yang sama untuk dibaca.']},
+    {title:'Tahap 3 • Membaca hari yang sama per pekan', icon:'③', delay:980, desc:'Menguji relasi seperti Senin ke Senin, Jumat ke Jumat, dan target hari berikutnya. V4.3 juga mengambil angka hari target terakhir sebagai jangkar rumus.', items:weekPairs.length ? weekPairs : ['Belum cukup pasangan hari yang sama untuk dibaca.']},
     {title:'Tahap 4 • Membaca operasi angka terbaru', icon:'④', delay:900, desc:`Latest ${latest.day || '-'} ${latest.digits.join(' ')} dibedah dengan tambah, kurang, kali, cermin, root, hari, dan pecah kembar.`, items:op},
     {title:'Tahap 5 • Mengunci 6 digit formula', icon:'⑤', delay:640, desc:'Menggabungkan kunci harian, kunci pekanan, operasi kembar, cermin, tetangga, root, golden, Fibonacci, affine, dan chain.', items:['Hasil akhir ditampilkan setelah semua tahap selesai.']}
   ];
@@ -647,10 +738,12 @@ function renderResult(r){
   </div>`).join('');
   const tableHtml = renderDataTable(r.rows.slice(0,18));
 
+  const anchorHtml = r.audit.targetAnchor ? `<div><b>Jangkar hari target</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchor.title)}</li><li>Carry: ${escapeHtml(r.audit.targetAnchor.carry)}</li><li>Cermin: ${escapeHtml(r.audit.targetAnchor.mirror)}</li><li>Gerbang: ${escapeHtml(r.audit.targetAnchor.gate)}</li><li>Root: ${escapeHtml(r.audit.targetAnchor.root)}</li></ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
     <div class="audit-columns">
       <div><b>Transisi harian terbaru</b><ul class="process-list small">${r.audit.process.daily.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
       <div><b>Hari sama per pekan</b><ul class="process-list small">${r.audit.process.weeklyLatest.concat(r.audit.process.weeklyTarget).slice(0,7).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Belum cukup pasangan pekanan.</li>'}</ul></div>
+      ${anchorHtml}
       <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
     </div>
   </div>` : '';
@@ -660,7 +753,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.2 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, dan pecah kembar.</p>
+      <p class="tagline">Engine V4.3 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, pecah kembar, dan jangkar hari target terakhir.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     <div class="section"><h3>Rumus Dominan Saat Ini</h3><div class="formula-grid">${formulaCards}</div></div>
