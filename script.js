@@ -1,16 +1,17 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.1 • Twin Split';
+const APP_VERSION = 'IPHOEL Formula Engine V4.2 • Slow Formula Audit';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
 const $ = id => document.getElementById(id);
 let lastRows = [];
+let analysisRunId = 0;
 
 function init(){
   $('versionPill').textContent = APP_VERSION;
   $('modelPill').textContent = 'Formula Murni';
-  $('dataInput').addEventListener('input', debounce(analyze, 180));
+  $('dataInput').addEventListener('input', debounce(analyze, 320));
   $('btnClear').addEventListener('click', clearAll);
   analyze();
 }
@@ -24,7 +25,8 @@ function clearAll(){
   $('output').innerHTML = '<div><div class="empty-icon">Φ</div><h3>Belum ada data</h3><p>Tempel data historis. Analisis berjalan otomatis.</p></div>';
 }
 
-function analyze(){
+async function analyze(){
+  const runId = ++analysisRunId;
   const rows = parseRows($('dataInput').value);
   lastRows = rows;
   $('rowCounter').textContent = `${rows.length} baris`;
@@ -33,7 +35,15 @@ function analyze(){
     $('output').innerHTML = '<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 8 baris agar mesin rumus dapat membaca transisi.</p></div>';
     return;
   }
+  const stages = buildSlowStages(rows);
+  for(let i=0;i<stages.length;i++){
+    if(runId !== analysisRunId) return;
+    renderLoadingStage(stages, i);
+    await sleep(stages[i].delay || 720);
+  }
+  if(runId !== analysisRunId) return;
   const result = buildFormulaPrediction(rows);
+  if(runId !== analysisRunId) return;
   renderResult(result);
 }
 
@@ -111,14 +121,17 @@ function buildFormulaPrediction(rows){
   const latest = rows[0];
   const chrono = rows.slice().reverse();
   const formulas = buildFormulaLibrary();
+  const targetDay = inferTargetDay(rows);
   const learned = learnFormulaWeights(chrono, formulas);
   const learnedDay = learnDayFormulaWeights(chrono, formulas, latest.day);
-  const candidate = scoreCurrent(latest, formulas, learned, learnedDay);
+  const learnedWeekLatest = learnWeekFormulaWeights(chrono, formulas, latest.day);
+  const learnedWeekTarget = learnWeekFormulaWeights(chrono, formulas, targetDay);
+  const candidate = scoreCurrent(latest, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
-  const targetDay = inferTargetDay(rows);
-  const audit = buildLocalFormulaAudit(rows, formulas, learned);
-  return {rows, latest, targetDay, formulas, learned, candidate, finalDigits, twinDigit, audit};
+  const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
+  audit.process = buildProcessCards(rows, formulas);
+  return {rows, latest, targetDay, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, audit};
 }
 
 function buildFormulaLibrary(){
@@ -211,7 +224,33 @@ function learnDayFormulaWeights(chrono, formulas, day){
   return learned;
 }
 
-function scoreCurrent(latest, formulas, learned, learnedDay){
+function learnWeekFormulaWeights(chrono, formulas, day){
+  const learned = {};
+  formulas.forEach(f => learned[f.id] = {value:0, hits:0, trials:0, name:f.name, family:f.family, weekSamples:[]});
+  if(!day || day === '-') return learned;
+  const sameDayRows = chrono.filter(r => r.day === day);
+  for(let i=0;i<sameDayRows.length-1;i++){
+    const prev = sameDayRows[i];
+    const next = uniqueDigits(sameDayRows[i+1].digits);
+    formulas.forEach(f => {
+      const out = uniqueDigits(f.fn(prev));
+      if(!out.length) return;
+      const hitDigits = out.filter(d => next.includes(d));
+      learned[f.id].trials += 1;
+      if(hitDigits.length){
+        learned[f.id].hits += hitDigits.length;
+        learned[f.id].value += hitDigits.length * 36 + Math.max(0, 8 - out.length);
+        learned[f.id].weekSamples.push({from:`${prev.day} ${prev.digits.join('')}`, to:`${sameDayRows[i+1].day} ${sameDayRows[i+1].digits.join('')}`, hit:hitDigits.join(' ')});
+      }
+    });
+  }
+  Object.values(learned).forEach(x => {
+    x.weekKey = Math.max(0, Math.round(x.value / Math.max(1, Math.floor((x.trials || 1) / 2))));
+  });
+  return learned;
+}
+
+function scoreCurrent(latest, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget){
   const score = Array(10).fill(0);
   const formulaHits = [];
   const familyScore = {};
@@ -221,8 +260,10 @@ function scoreCurrent(latest, formulas, learned, learnedDay){
     if(!out.length) return;
     const key = learned[f.id]?.key || 1;
     const dayKey = learnedDay?.[f.id]?.dayKey || 0;
+    const weekLatestKey = learnedWeekLatest?.[f.id]?.weekKey || 0;
+    const weekTargetKey = learnedWeekTarget?.[f.id]?.weekKey || 0;
     const penalty = Math.max(0, out.length - 6);
-    const power = Math.max(1, key - penalty) + Math.max(0, dayKey - penalty);
+    const power = Math.max(1, key - penalty) + Math.max(0, dayKey - penalty) + Math.max(0, weekLatestKey - penalty) + Math.max(0, Math.floor(weekTargetKey / 2) - penalty);
     out.forEach(d => {
       score[d] += power;
       digitTrace[d].push({name:f.name, family:f.family, key:power});
@@ -471,14 +512,113 @@ function chooseTwinDigit(candidate, finalDigits, latest){
 }
 
 
-function buildLocalFormulaAudit(rows, formulas, learned){
+function buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget){
   const latest = rows[0];
   const active = formulas.map(f => {
     const digits = uniqueDigits(f.fn(latest));
     const meta = learned[f.id] || {key:1, samples:[]};
-    return {name:f.name, family:f.family, key:meta.key, digits, samples:meta.samples.slice(-2)};
+    const weekLatest = learnedWeekLatest?.[f.id]?.weekKey || 0;
+    const weekTarget = learnedWeekTarget?.[f.id]?.weekKey || 0;
+    return {name:f.name, family:f.family, key:meta.key + weekLatest + Math.floor(weekTarget/2), digits, samples:meta.samples.slice(-2), weekLatest, weekTarget};
   }).sort((a,b) => b.key - a.key).slice(0,10);
   return {active};
+}
+
+
+function sleep(ms){return new Promise(resolve => setTimeout(resolve, ms));}
+
+function buildSlowStages(rows){
+  const formulas = buildFormulaLibrary();
+  const chrono = rows.slice().reverse();
+  const latest = rows[0];
+  const targetDay = inferTargetDay(rows);
+  const earlyPairs = [];
+  for(let i=0;i<Math.min(3, chrono.length-1);i++) earlyPairs.push(pairText(chrono[i], chrono[i+1], formulas));
+  const recentPairs = [];
+  for(let i=Math.max(0, chrono.length-6); i<chrono.length-1; i++) recentPairs.push(pairText(chrono[i], chrono[i+1], formulas));
+  const weekPairs = buildWeekPairs(rows, formulas, latest.day, 5).concat(buildWeekPairs(rows, formulas, targetDay, 4));
+  const op = latestOperationCards(latest);
+  return [
+    {title:'Tahap 1 • Menyusun kronologi', icon:'①', delay:850, desc:`Membaca ${rows.length} baris dari data paling lama ke paling baru.`, items:earlyPairs},
+    {title:'Tahap 2 • Membaca transisi harian', icon:'②', delay:980, desc:'Menguji rumus dari satu hari ke hari berikutnya. App mencari operasi yang pernah menembus draw sesudahnya.', items:recentPairs},
+    {title:'Tahap 3 • Membaca hari yang sama per pekan', icon:'③', delay:980, desc:'Menguji relasi seperti Senin ke Senin, Jumat ke Jumat, dan target hari berikutnya. Ini bukan persen, tetapi jejak rumus antar pekan.', items:weekPairs.length ? weekPairs : ['Belum cukup pasangan hari yang sama untuk dibaca.']},
+    {title:'Tahap 4 • Membaca operasi angka terbaru', icon:'④', delay:900, desc:`Latest ${latest.day || '-'} ${latest.digits.join(' ')} dibedah dengan tambah, kurang, kali, cermin, root, hari, dan pecah kembar.`, items:op},
+    {title:'Tahap 5 • Mengunci 6 digit formula', icon:'⑤', delay:640, desc:'Menggabungkan kunci harian, kunci pekanan, operasi kembar, cermin, tetangga, root, golden, Fibonacci, affine, dan chain.', items:['Hasil akhir ditampilkan setelah semua tahap selesai.']}
+  ];
+}
+
+function renderLoadingStage(stages, activeIndex){
+  const active = stages[activeIndex];
+  const progress = Math.round(((activeIndex + 1) / stages.length) * 100);
+  const stepHtml = stages.map((s,i) => `<div class="step ${i<activeIndex?'done':i===activeIndex?'active':''}"><span>${s.icon}</span><b>${escapeHtml(s.title.replace(/^Tahap \d+ • /,''))}</b></div>`).join('');
+  const itemHtml = (active.items || []).slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('');
+  $('output').className = '';
+  $('output').innerHTML = `<div class="loading-card">
+    <div class="loading-head"><div><small>Proses Formula Berjalan</small><h3>${escapeHtml(active.title)}</h3></div><div class="loader-ring">${progress}</div></div>
+    <div class="progress"><div style="width:${progress}%"></div></div>
+    <p>${escapeHtml(active.desc)}</p>
+    <div class="steps">${stepHtml}</div>
+    <ul class="process-list">${itemHtml}</ul>
+  </div>`;
+}
+
+function pairText(prev, next, formulas){
+  const hits = transitionFormulaHits(prev, next, formulas).slice(0,3);
+  const hitText = hits.length ? hits.map(h => `${h.name} → ${h.hit.join(' ')}`).join(' | ') : 'belum ada rumus dominan';
+  return `${prev.day || '-'} ${prev.digits.join('')} → ${next.day || '-'} ${next.digits.join('')} : ${hitText}`;
+}
+
+function transitionFormulaHits(prev, next, formulas){
+  const target = uniqueDigits(next.digits);
+  return formulas.map(f => {
+    const out = uniqueDigits(f.fn(prev));
+    const hit = out.filter(d => target.includes(d));
+    return {name:f.name, family:f.family, hit, out};
+  }).filter(x => x.hit.length).sort((a,b) => b.hit.length - a.hit.length || a.out.length - b.out.length);
+}
+
+function buildWeekPairs(rows, formulas, day, limit){
+  if(!day || day === '-') return [];
+  const chrono = rows.slice().reverse();
+  const same = chrono.filter(r => r.day === day);
+  const out = [];
+  for(let i=Math.max(0, same.length-limit-1); i<same.length-1; i++){
+    if(i < 0) continue;
+    out.push(pairText(same[i], same[i+1], formulas));
+  }
+  return out;
+}
+
+function latestOperationCards(row){
+  const a = row.digits;
+  const cards = [];
+  cards.push(`Tambah berantai: ${mod10(a[0]+a[1])}, ${mod10(a[1]+a[2])}, ${mod10(a[2]+a[3])}, ${mod10(a[3]+a[0])}`);
+  cards.push(`Selisih berantai: ${Math.abs(a[0]-a[1])}, ${Math.abs(a[1]-a[2])}, ${Math.abs(a[2]-a[3])}, ${Math.abs(a[3]-a[0])}`);
+  cards.push(`Cermin 9/10: ${uniqueDigits(flat(a.map(d => [mod10(9-d), mod10(10-d)]))).join(' ')}`);
+  cards.push(`Root total ${sumDigits(row)} → ${digitalRoot(sumDigits(row))}`);
+  cards.push(`Golden 6/4 dan Fibonacci 1/3/5/8 aktif pada semua digit terbaru.`);
+  const info = twinInfo(row);
+  if(info.twins.length){
+    cards.push(`Pecah kembar ${info.twins.join(' ')} → ${twinSplitDigits(row).join(' ')}`);
+    cards.push(`Digit tunggal setelah kembar ${info.singles.join(' ')} → ${twinMirrorSingleDigits(row).join(' ')}`);
+  }else{
+    cards.push(`Tidak ada kembar. Gerbang kanan-kiri → ${singlePairGateDigits(row).join(' ')}`);
+  }
+  cards.push(`Kunci hari ${row.day || '-'} → ${dayPairShiftDigits(row).join(' ')}`);
+  return cards;
+}
+
+function buildProcessCards(rows, formulas){
+  const latest = rows[0];
+  const chrono = rows.slice().reverse();
+  const recent = [];
+  for(let i=Math.max(0, chrono.length-5); i<chrono.length-1; i++) recent.push(pairText(chrono[i], chrono[i+1], formulas));
+  return {
+    daily: recent,
+    weeklyLatest: buildWeekPairs(rows, formulas, latest.day, 4),
+    weeklyTarget: buildWeekPairs(rows, formulas, inferTargetDay(rows), 4),
+    latestOps: latestOperationCards(latest)
+  };
 }
 
 function inferTargetDay(rows){
@@ -506,17 +646,26 @@ function renderResult(r){
     <div class="chips">${f.digits.slice(0,10).map((d,i) => `<span class="chip ${i%3===0?'hot':i%3===1?'green':'red'}">${d}</span>`).join('')}</div>
   </div>`).join('');
   const tableHtml = renderDataTable(r.rows.slice(0,18));
+
+  const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
+    <div class="audit-columns">
+      <div><b>Transisi harian terbaru</b><ul class="process-list small">${r.audit.process.daily.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
+      <div><b>Hari sama per pekan</b><ul class="process-list small">${r.audit.process.weeklyLatest.concat(r.audit.process.weeklyTarget).slice(0,7).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Belum cukup pasangan pekanan.</li>'}</ul></div>
+      <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
+    </div>
+  </div>` : '';
   $('output').className = '';
   $('output').innerHTML = `<div class="result-block">
     <div class="final-card">
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.1 membaca operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, dan pecah kembar.</p>
+      <p class="tagline">Engine V4.2 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, dan pecah kembar.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     <div class="section"><h3>Rumus Dominan Saat Ini</h3><div class="formula-grid">${formulaCards}</div></div>
     <div class="section"><h3>Ranking Digit Berdasarkan Rumus</h3><div class="rank">${topDigits}</div></div>
+    ${processHtml}
     <div class="section"><h3>Arsip Terbaru</h3>${tableHtml}</div>
   </div>`;
 }
