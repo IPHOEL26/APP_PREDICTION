@@ -522,6 +522,8 @@ function buildModel(rows, market){
   const targetDay = inferTargetDay(rows);
   const targetMonth = inferTargetMonth(rows);
   const latestSet = new Set(latest?.digits || []);
+  const latestCounts = countMap(latest?.digits || []);
+  const latestHasTwin = Object.values(latestCounts).some(v => v >= 2);
   const rowPresence = Array(10).fill(0);
   const rawCount = Array(10).fill(0);
   const gap = Array(10).fill(N + 1);
@@ -581,14 +583,21 @@ function buildModel(rows, market){
   const reboundScore = buildGapReboundScore(rows, presence, recent, mid, gap, latestSet);
   const neighborScore = buildNeighborEchoScore(rows, latestSet);
   const antiScore = buildAntiSaturationScore(rows, latestSet);
+  const survivorScore = buildSurvivorCarryScore(rows, latest, presence, dayScore, neighborScore);
 
   const score = DIGITS.map(d => {
-    return 0.38*oldScore[d] +
-      0.20*reboundScore[d] +
-      0.13*neighborScore[d] +
-      0.10*shapeScore[d] +
-      0.10*positionScore[d] +
-      0.09*antiScore[d];
+    /*
+      FORMULA V3.1
+      Fokus utama tetap digit bebas posisi, bukan tebak urutan.
+      Position Score menjadi pembisik kecil.
+      Survivor Carry ditambahkan agar digit tunggal dari draw terakhir yang masih sehat tidak terlalu cepat dibuang.
+    */
+    return 0.36*oldScore[d] +
+      0.23*reboundScore[d] +
+      0.15*neighborScore[d] +
+      0.12*shapeScore[d] +
+      0.04*positionScore[d] +
+      0.10*antiScore[d];
   });
   const normalizedScore = normalizeArray(score);
   const classMap = classifyDigits(presence);
@@ -603,14 +612,18 @@ function buildModel(rows, market){
     neighborScore,
     shapeScore,
     antiScore,
+    survivorScore,
     positionScore,
-    presence
+    presence,
+    oldScore,
+    latestHasTwin
   });
   const twinScores = buildTwinScoreV2(rows, normalizedScore, repeatScore, dayScore, recent, markov, {
     reboundScore,
     neighborScore,
     shapeScore,
     antiScore,
+    survivorScore,
     presence
   });
   const twinDigit = finalDigits.slice().sort((a,b) => twinScores[b] - twinScores[a])[0];
@@ -639,6 +652,7 @@ function buildModel(rows, market){
     shape:shapeScore[d],
     position:positionScore[d],
     anti:antiScore[d],
+    survivor:survivorScore[d],
     twin:twinScores[d],
     className:classMap[d]
   })).sort((a,b) => b.score - a.score);
@@ -875,15 +889,33 @@ function buildAntiSaturationScore(rows, latestSet){
   return DIGITS.map(d => clamp(1 - (count[d] / maxCount) + (latestSet.has(d) ? 0 : 0.18), 0, 1));
 }
 
+function buildSurvivorCarryScore(rows, latest, presence, dayScore, neighborScore){
+  const latestCounts = countMap(latest?.digits || []);
+  const raw = DIGITS.map(d => {
+    const latestSingle = (latestCounts[d] || 0) === 1 ? 1 : 0;
+    const latestTwin = (latestCounts[d] || 0) >= 2 ? 1 : 0;
+
+    // Digit yang muncul tunggal di draw terakhir masih boleh dibawa.
+    // Digit yang sudah kembar tidak langsung dibawa, karena sering sudah jenuh.
+    return 0.40*latestSingle +
+      0.25*(dayScore[d] || 0) +
+      0.20*(presence[d] || 0) +
+      0.15*(neighborScore[d] || 0) -
+      0.10*latestTwin;
+  });
+  return normalizeArray(raw);
+}
+
 function buildTwinScoreV2(rows, digitScore, repeatScore, dayScore, recent, markov, ctx){
   const oldTwin = buildTwinScore(rows, digitScore, dayScore, recent, markov);
   return DIGITS.map(d => clamp(
     0.32*oldTwin[d] +
     0.22*ctx.reboundScore[d] +
     0.14*ctx.shapeScore[d] +
-    0.12*ctx.antiScore[d] +
+    0.11*ctx.antiScore[d] +
     0.08*ctx.neighborScore[d] +
-    0.07*ctx.presence[d] +
+    0.06*ctx.presence[d] +
+    0.04*ctx.survivorScore[d] +
     0.05*repeatScore[d],
   0, 1));
 }
@@ -922,7 +954,7 @@ function chooseFinalDigits(score, ctx){
     if(selected.length < 4) selected.push(d);
   });
 
-  // Kuota 1: digit rebound. Ini mencegah digit historis kuat seperti 8 atau 0 hilang hanya karena recent window turun.
+  // Kuota 1: digit rebound. Ini menjaga digit dingin yang historisnya masih hidup.
   DIGITS.slice().sort((a,b) => {
     const sa = (ctx.reboundScore?.[a] || 0) + 0.35*(ctx.antiScore?.[a] || 0) + 0.20*(ctx.presence?.[a] || 0) + 0.15*score[a];
     const sb = (ctx.reboundScore?.[b] || 0) + 0.35*(ctx.antiScore?.[b] || 0) + 0.20*(ctx.presence?.[b] || 0) + 0.15*score[b];
@@ -931,7 +963,7 @@ function chooseFinalDigits(score, ctx){
     if(selected.length < 5 && !selected.includes(d)) selected.push(d);
   });
 
-  // Kuota 2: digit rotasi tetangga atau shape. Ini membaca 9→8/0, 5→4/6, dan pola bentuk draw serupa.
+  // Kuota 2: digit rotasi tetangga atau shape. Ini membaca 9→8/0, 7→6/8, 1→0/2, dan bentuk draw serupa.
   DIGITS.slice().sort((a,b) => {
     const sa = 0.55*(ctx.neighborScore?.[a] || 0) + 0.25*(ctx.antiScore?.[a] || 0) + 0.20*(ctx.shapeScore?.[a] || 0);
     const sb = 0.55*(ctx.neighborScore?.[b] || 0) + 0.25*(ctx.antiScore?.[b] || 0) + 0.20*(ctx.shapeScore?.[b] || 0);
@@ -940,12 +972,182 @@ function chooseFinalDigits(score, ctx){
     if(selected.length < 6 && !selected.includes(d)) selected.push(d);
   });
 
+  // Repair V3.1: ganti bridge yang terlalu spekulatif dengan digit yang punya dukungan dasar lebih kuat.
+  // Tujuan: menjaga minimal 3 digit masuk, bukan mengejar satu modul yang terlalu agresif.
+  repairWeakBridge(selected, score, ctx);
+  forceStrongSurvivorAfterTwin(selected, score, ctx);
+
   // Fallback bila data terlalu pendek.
   DIGITS.slice().sort((a,b) => score[b] - score[a]).forEach(d => {
     if(selected.length < 6 && !selected.includes(d)) selected.push(d);
   });
 
   return selected.slice(0,6).sort((a,b) => score[b] - score[a]);
+}
+
+function repairWeakBridge(selected, score, ctx){
+  const oldScore = ctx.oldScore || Array(10).fill(0);
+  const dayScore = ctx.dayScore || Array(10).fill(0);
+  const reboundScore = ctx.reboundScore || Array(10).fill(0);
+  const neighborScore = ctx.neighborScore || Array(10).fill(0);
+  const shapeScore = ctx.shapeScore || Array(10).fill(0);
+  const antiScore = ctx.antiScore || Array(10).fill(0);
+  const survivorScore = ctx.survivorScore || Array(10).fill(0);
+  const presence = ctx.presence || Array(10).fill(0);
+
+  const strength = d => score[d]
+    + 0.18*oldScore[d]
+    + 0.16*dayScore[d]
+    + 0.12*presence[d]
+    + 0.08*shapeScore[d]
+    + 0.08*survivorScore[d];
+
+  for(let pass=0; pass<2; pass++){
+    const weak = selected.filter(d => {
+      const protectedDigit =
+        neighborScore[d] >= 0.72 ||
+        (reboundScore[d] >= 0.72 && presence[d] >= 0.30) ||
+        dayScore[d] >= 0.60 ||
+        survivorScore[d] >= 0.72 ||
+        (oldScore[d] >= 0.55 && score[d] >= 0.55);
+
+      return !protectedDigit &&
+        score[d] < 0.60 &&
+        oldScore[d] < 0.30 &&
+        presence[d] < 0.31;
+    });
+
+    if(!weak.length) break;
+
+    const weakest = weak.slice().sort((a,b) => strength(a) - strength(b))[0];
+    const candidates = DIGITS.filter(d => !selected.includes(d));
+    if(!candidates.length) break;
+
+    const challenger = candidates.sort((a,b) => strength(b) - strength(a))[0];
+    const challengerHasBase =
+      oldScore[challenger] > 0.50 ||
+      dayScore[challenger] > 0.50 ||
+      presence[challenger] > 0.34 ||
+      shapeScore[challenger] > 0.50 ||
+      survivorScore[challenger] > 0.62;
+
+    if(challengerHasBase && strength(challenger) > strength(weakest) + 0.03){
+      selected[selected.indexOf(weakest)] = challenger;
+    }else{
+      break;
+    }
+  }
+}
+
+function forceStrongSurvivorAfterTwin(selected, score, ctx){
+  if(!ctx.latestHasTwin) return;
+  const survivorScore = ctx.survivorScore || Array(10).fill(0);
+  const oldScore = ctx.oldScore || Array(10).fill(0);
+  const dayScore = ctx.dayScore || Array(10).fill(0);
+  const reboundScore = ctx.reboundScore || Array(10).fill(0);
+  const neighborScore = ctx.neighborScore || Array(10).fill(0);
+  const presence = ctx.presence || Array(10).fill(0);
+  const classMap = ctx.classMap || {};
+
+  // Survivor paksa hanya aktif bila sinyalnya sangat kuat.
+  // Tujuannya menangkap digit tunggal dari draw terakhir yang masih hidup, seperti 1 pada pola 9-1-7-7.
+  const challengers = DIGITS.filter(d => !selected.includes(d) && survivorScore[d] >= 0.78);
+  if(!challengers.length) return;
+
+  const victims = selected.filter(d => {
+    const protectedDigit =
+      survivorScore[d] >= 0.70 ||
+      oldScore[d] >= 0.64 ||
+      dayScore[d] >= 0.60 ||
+      presence[d] >= 0.43 ||
+      reboundScore[d] >= 0.88;
+
+    const rotasiOnly =
+      neighborScore[d] >= 0.75 &&
+      oldScore[d] < 0.45 &&
+      dayScore[d] < 0.40 &&
+      score[d] < 0.65;
+
+    const weakBridge =
+      classMap[d] === 'bridge' &&
+      oldScore[d] < 0.42 &&
+      dayScore[d] < 0.45;
+
+    return !protectedDigit && (rotasiOnly || weakBridge);
+  });
+  if(!victims.length) return;
+
+  const challenger = challengers.sort((a,b) => survivorScore[b] - survivorScore[a])[0];
+  const victim = victims.sort((a,b) => {
+    const sa = score[a] + 0.18*oldScore[a] + 0.16*dayScore[a] + 0.10*presence[a];
+    const sb = score[b] + 0.18*oldScore[b] + 0.16*dayScore[b] + 0.10*presence[b];
+    return sa - sb;
+  })[0];
+
+  // Penggantian hanya bila challenger benar-benar survivor kuat.
+  if(survivorScore[challenger] >= 0.78 && survivorScore[challenger] > survivorScore[victim] + 0.20){
+    selected[selected.indexOf(victim)] = challenger;
+  }
+}
+
+function repairSurvivorAndStable(selected, score, ctx){
+  const oldScore = ctx.oldScore || Array(10).fill(0);
+  const dayScore = ctx.dayScore || Array(10).fill(0);
+  const reboundScore = ctx.reboundScore || Array(10).fill(0);
+  const neighborScore = ctx.neighborScore || Array(10).fill(0);
+  const shapeScore = ctx.shapeScore || Array(10).fill(0);
+  const antiScore = ctx.antiScore || Array(10).fill(0);
+  const survivorScore = ctx.survivorScore || Array(10).fill(0);
+  const presence = ctx.presence || Array(10).fill(0);
+  const classMap = ctx.classMap || {};
+
+  const strength = d => score[d]
+    + 0.16*oldScore[d]
+    + 0.14*dayScore[d]
+    + 0.12*presence[d]
+    + 0.10*shapeScore[d]
+    + 0.12*survivorScore[d]
+    + 0.06*neighborScore[d];
+
+  for(let pass=0; pass<2; pass++){
+    const challengers = DIGITS.filter(d => !selected.includes(d)).filter(d => {
+      return survivorScore[d] >= 0.62 ||
+        (oldScore[d] >= 0.48 && dayScore[d] >= 0.42) ||
+        (presence[d] >= 0.34 && shapeScore[d] >= 0.45) ||
+        (oldScore[d] >= 0.58 && presence[d] >= 0.32);
+    });
+
+    if(!challengers.length) break;
+
+    const challenger = challengers.sort((a,b) => strength(b) - strength(a))[0];
+
+    const replaceable = selected.filter(d => {
+      const protectedDigit =
+        survivorScore[d] >= 0.70 ||
+        oldScore[d] >= 0.64 ||
+        dayScore[d] >= 0.64 ||
+        reboundScore[d] >= 0.82 ||
+        neighborScore[d] >= 0.82 ||
+        (presence[d] >= 0.42 && score[d] >= 0.55);
+
+      const speculative =
+        (classMap[d] === 'bridge' && oldScore[d] < 0.46) ||
+        (antiScore[d] >= 0.70 && oldScore[d] < 0.50 && dayScore[d] < 0.50) ||
+        (score[d] < 0.48 && survivorScore[d] < 0.50);
+
+      return speculative && !protectedDigit;
+    });
+
+    if(!replaceable.length) break;
+
+    const weakest = replaceable.sort((a,b) => strength(a) - strength(b))[0];
+
+    if(strength(challenger) > strength(weakest) + 0.015){
+      selected[selected.indexOf(weakest)] = challenger;
+    }else{
+      break;
+    }
+  }
 }
 
 function chiSquareDigitTest(rows){
@@ -1051,7 +1253,7 @@ function renderReport(r){
   const rankHtml = r.models.map(m => `<div class="rankitem">
     <b>${m.digit}</b>
     <div><div class="bar"><div class="fill" style="width:${clamp(m.score*100,3,100)}%"></div></div>
-    <small>${m.className} • skor=${fmt(m.score,3)} • old=${pct(m.oldScore)} • rebound=${pct(m.rebound)} • rotasi=${pct(m.neighbor)} • shape=${pct(m.shape)} • posisi=${pct(m.position)} • anti=${pct(m.anti)} • recent=${pct(m.recent)} • markov=${pct(m.markov)}</small></div>
+    <small>${m.className} • skor=${fmt(m.score,3)} • old=${pct(m.oldScore)} • rebound=${pct(m.rebound)} • rotasi=${pct(m.neighbor)} • shape=${pct(m.shape)} • survivor=${pct(m.survivor)} • posisi=${pct(m.position)} • anti=${pct(m.anti)} • recent=${pct(m.recent)} • markov=${pct(m.markov)}</small></div>
     <b>${fmt(m.score,3)}</b></div>`).join('');
   const twinHtml = r.models.slice().sort((a,b) => b.twin - a.twin).map(m => `<div class="rankitem">
     <b>${m.digit}</b><div><small>twin=${fmt(m.twin,3)} • repeat=${pct(m.repeat)} • rebound=${pct(m.rebound)} • shape=${pct(m.shape)} • anti=${pct(m.anti)} • markov=${pct(m.markov)} ${m.digit===r.twinDigit?'• TWIN':''}</small></div><b>${fmt(m.twin,3)}</b></div>`).join('');
@@ -1078,7 +1280,7 @@ function renderReport(r){
       <h3>Final 6 Digit Utama + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar berbasis riset</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Shortlist V2 membaca frekuensi lama, rebound digit dingin, rotasi tetangga, shape Markov, sinyal posisi, anti-saturation, pair support, gap, repeat, dan golden ratio. Gunakan sebagai bahan belajar pola, bukan kepastian hasil.</p>
+      <p class="tagline">Shortlist V3.1 membaca frekuensi lama, rebound digit dingin, rotasi tetangga, shape Markov, survivor carry, sinyal posisi kecil, anti-saturation, pair support, gap, repeat, dan golden ratio. Gunakan sebagai bahan belajar pola, bukan kepastian hasil.</p>
     </div>
     <div class="section"><h3>Diagnostik Market</h3>${statsHtml}</div>
     ${backtestHtml}
