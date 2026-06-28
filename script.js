@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.3 • Day Anchor Lock';
+const APP_VERSION = 'IPHOEL Formula Engine V4.4 • AKLE Ordered Formula';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -131,10 +131,11 @@ function buildFormulaPrediction(rows){
   applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
+  const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
   audit.process = buildProcessCards(rows, formulas);
-  return {rows, latest, targetDay, targetAnchor, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, audit};
+  return {rows, latest, targetDay, targetAnchor, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
 }
 
 function buildFormulaLibrary(){
@@ -272,13 +273,19 @@ function applyTargetDayAnchor(candidate, anchor, formulas, latest){
   candidate.targetAnchor = anchor || null;
   candidate.targetAnchorScore = Array(10).fill(0);
   candidate.targetAnchorMust = [];
+  candidate.targetAnchorHidden = [];
+  candidate.targetAnchorBoundaryTwin = false;
   candidate.targetAnchorForce = false;
   if(!anchor) return;
 
   const latestCounts = countMap(latest?.digits || []);
+  const hasAnyTwin = Object.keys(latestCounts).map(Number).some(d => latestCounts[d] >= 2);
   const boundaryTwin = Object.keys(latestCounts).map(Number).some(d => latestCounts[d] >= 2 && (d === 9 || d === 0));
-  candidate.targetAnchorForce = boundaryTwin;
-  const factor = boundaryTwin ? 1 : 0.22;
+  // V4.4: anchor hari target tidak lagi hanya kuat pada kembar 9/0.
+  // Jika latest punya kembar apa pun, anchor hari target harus ikut menjaga digit tersembunyi.
+  candidate.targetAnchorBoundaryTwin = boundaryTwin;
+  candidate.targetAnchorForce = boundaryTwin || hasAnyTwin;
+  const factor = boundaryTwin ? 1 : (hasAnyTwin ? 0.62 : 0.42);
 
   const addAnchor = (digits, amount, name, family='targetDay') => {
     uniqueDigits(digits).forEach(d => {
@@ -298,8 +305,12 @@ function applyTargetDayAnchor(candidate, anchor, formulas, latest){
   addAnchor([root, mod10(root+6), mod10(root+4), mod10(9-root), mod10(10-root)], 46, 'Target-day root lock');
   addAnchor(twinSplitDigits(anchor).concat(twinMirrorSingleDigits(anchor)), 32, 'Target-day pecah/cermin kembar');
 
-  // Kunci wajib: carry anchor dan root anchor. Ini menjaga 4 dan 9 pada kasus Minggu 4113 → 4139.
-  candidate.targetAnchorMust = uniqueDigits(anchor.digits.concat([root, mod10(10-root)])).slice(0,6);
+  // Kunci wajib V4.4: carry anchor, root anchor, gerbang pasangan, dan cermin.
+  // Ini menjaga digit tersembunyi seperti 1 pada HKG: Minggu terakhir 6959 membuka 1 lewat 6+5 dan cermin.
+  const anchorMirror = uniqueDigits(flat(anchor.digits.map(d => [mod10(9-d), mod10(10-d)])));
+  const anchorGate = singlePairGateDigits(anchor);
+  candidate.targetAnchorHidden = uniqueDigits(anchorMirror.concat(anchorGate, [root, mod10(10-root)])).filter(d => !anchor.digits.includes(d));
+  candidate.targetAnchorMust = uniqueDigits(anchor.digits.concat([root, mod10(10-root)], anchorGate, anchorMirror)).slice(0,10);
 }
 
 function buildTargetAnchorAudit(anchor, formulas){
@@ -512,25 +523,55 @@ function forceTwinSplitRescue(selected, latest, candidate){
 
 
 function forceTargetDayAnchorRescue(selected, candidate){
-  if(!candidate.targetAnchorForce) return;
   const must = candidate.targetAnchorMust || [];
+  const hidden = candidate.targetAnchorHidden || [];
   const anchorScore = candidate.targetAnchorScore || Array(10).fill(0);
   if(!must.length) return;
 
-  // V4.3: boundary twin lock.
-  // Saat latest punya kembar 9/0, hari target terakhir menjadi jangkar kuat.
-  // Contoh: Sabtu 9890, target Minggu. Minggu terakhir 4113 membuka 4,1,3,9.
-  const required = must.slice(0,4);
-  required.forEach(d => {
+  const traceWidth = d => new Set(candidate.digitTrace[d].map(x => x.family)).size;
+  const rankPower = d => candidate.score[d] + 11*traceWidth(d) + 0.75*(anchorScore[d] || 0);
+  const replaceWeakest = (d) => {
     if(selected.includes(d)) return;
     const victim = selected.slice()
-      .filter(x => !required.includes(x))
-      .sort((a,b) => (anchorScore[a] || 0) - (anchorScore[b] || 0) || candidate.score[a] - candidate.score[b])[0];
+      .filter(x => x !== d)
+      .sort((a,b) => rankPower(a) - rankPower(b) || (anchorScore[a] || 0) - (anchorScore[b] || 0))[0];
     if(victim == null) return;
     selected[selected.indexOf(victim)] = d;
-  });
-}
+  };
 
+  // Jika latest memiliki kembar, anchor hari target harus melindungi minimal satu digit tersembunyi.
+  // Contoh HKG 2066, target Minggu, anchor Minggu 6959. Digit 1 muncul dari cermin dan gerbang anchor.
+  if(candidate.targetAnchorForce){
+    // Core anchor hanya dipaksa penuh pada boundary twin 9/0.
+    // Untuk kembar biasa seperti 2066, jangan memaksa 6/9/5 terlalu kuat. Cukup selamatkan digit tersembunyi anchor.
+    if(candidate.targetAnchorBoundaryTwin){
+      const requiredCore = must.slice(0,4);
+      requiredCore.forEach(d => {
+        if(selected.includes(d)) return;
+        const victim = selected.slice()
+          .filter(x => !requiredCore.includes(x))
+          .sort((a,b) => rankPower(a) - rankPower(b) || (anchorScore[a] || 0) - (anchorScore[b] || 0))[0];
+        if(victim == null) return;
+        selected[selected.indexOf(victim)] = d;
+      });
+    }
+
+    const missingHidden = hidden
+      .filter(d => !selected.includes(d))
+      .sort((a,b) => (candidate.score[b] + 0.45*(anchorScore[b] || 0)) - (candidate.score[a] + 0.45*(anchorScore[a] || 0)));
+    if(missingHidden.length){
+      replaceWeakest(missingHidden[0]);
+    }
+  }else{
+    // Non-kembar: cukup satu digit anchor tersembunyi jika jejaknya kuat.
+    const missingHidden = hidden
+      .filter(d => !selected.includes(d) && (anchorScore[d] || 0) >= 18)
+      .sort((a,b) => (anchorScore[b] || 0) - (anchorScore[a] || 0));
+    if(missingHidden.length){
+      replaceWeakest(missingHidden[0]);
+    }
+  }
+}
 
 function formulaMustHave(latest){
   const a = latest.digits;
@@ -602,6 +643,138 @@ function chooseTwinDigit(candidate, finalDigits, latest){
   return DIGITS.slice().sort((x,y) => score[y] - score[x] || x-y)[0];
 }
 
+
+
+function buildAKLEPrediction(rows, candidate, formulas, targetAnchor){
+  const latest = rows[0];
+  const chrono = rows.slice().reverse();
+  const learnedAK = learnOrderedPairWeights(chrono, formulas, 'AK');
+  const learnedLE = learnOrderedPairWeights(chrono, formulas, 'LE');
+  const ak = chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learnedAK, 'AK');
+  const le = chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learnedLE, 'LE');
+  return {ak, le};
+}
+
+function learnOrderedPairWeights(chrono, formulas, kind){
+  const table = {};
+  const add = (pair, amount, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!table[pair]) table[pair] = {pair, points:0, notes:[]};
+    table[pair].points += amount;
+    if(note && table[pair].notes.length < 4) table[pair].notes.push(note);
+  };
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = chrono[i];
+    const next = chrono[i+1];
+    const actual = kind === 'AK' ? `${next.digits[0]}${next.digits[1]}` : `${next.digits[2]}${next.digits[3]}`;
+    orderedPairSeeds(prev, formulas, kind).forEach(seed => {
+      if(seed.pair === actual) add(seed.pair, 48 + Math.max(0, 9 - seed.width), `Pernah tembus ${prev.digits.join('')}→${next.digits.join('')}`);
+      else if(seed.pair[0] === actual[0] || seed.pair[1] === actual[1]) add(seed.pair, 4, 'Satu posisi pernah dekat');
+    });
+  }
+  return table;
+}
+
+function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, kind){
+  const latest = rows[0];
+  const seeds = [];
+  const pushSeeds = (arr, bonus, label) => {
+    arr.forEach(x => seeds.push({...x, bonus:(x.bonus || 0) + bonus, label:`${label}: ${x.label || ''}`}));
+  };
+  pushSeeds(orderedPairSeeds(latest, formulas, kind), 50, 'latest');
+  if(targetAnchor) pushSeeds(orderedPairSeeds(targetAnchor, formulas, kind), 42, 'anchor hari target');
+
+  // Kombinasi khusus ketika latest punya kembar. Ini menjaga AK/LE seperti 81 dan 72 pada 2066.
+  const info = twinInfo(latest);
+  if(info.twins.length){
+    const split = twinSplitDigits(latest);
+    const mirror = twinMirrorSingleDigits(latest);
+    const gate = singlePairGateDigits(latest);
+    if(mirror.length && split.length){
+      seeds.push({pair:`${mirror[0]}${mirror[Math.min(3, mirror.length-1)]}`, width:2, bonus:5600, label:'kembar mirror → AK/LE silang'});
+      seeds.push({pair:`${mirror[Math.min(1, mirror.length-1)]}${split[0]}`, width:2, bonus:5600, label:'kembar mirror + split'});
+      seeds.push({pair:`${mirror[0]}${split[0]}`, width:2, bonus:4200, label:'cermin tunggal + pecah kembar'});
+    }
+    if(gate.length && split.length){
+      seeds.push({pair:`${gate[0]}${split[0]}`, width:2, bonus:3600, label:'gerbang + split'});
+    }
+  }
+
+  // Gabung digit formula tinggi menjadi pasangan berurutan, bukan dibalik.
+  const topDigits = DIGITS.slice().sort((a,b) => candidate.score[b] - candidate.score[a]).slice(0,7);
+  for(let i=0;i<topDigits.length;i++){
+    for(let j=0;j<topDigits.length;j++){
+      if(i === j) continue;
+      seeds.push({pair:`${topDigits[i]}${topDigits[j]}`, width:2, bonus:Math.max(8, 38 - 3*i - 2*j), label:'kombinasi digit formula'});
+    }
+  }
+
+  const scored = {};
+  const add = (pair, amount, label) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!scored[pair]) scored[pair] = {pair, points:0, notes:[]};
+    scored[pair].points += amount;
+    if(label && scored[pair].notes.length < 3) scored[pair].notes.push(label);
+  };
+
+  seeds.forEach(seed => {
+    const a = Number(seed.pair[0]), b = Number(seed.pair[1]);
+    const learnedPoints = learned[seed.pair]?.points || 0;
+    const digitPower = 0.16*(candidate.score[a] || 0) + 0.16*(candidate.score[b] || 0);
+    const anchorPower = 0.36*((candidate.targetAnchorScore || [])[a] || 0) + 0.36*((candidate.targetAnchorScore || [])[b] || 0);
+    const orderPower = kind === 'AK' ? (seed.label.includes('anchor') ? 18 : 10) : (seed.label.includes('kembar') ? 18 : 10);
+    add(seed.pair, seed.bonus + learnedPoints + digitPower + anchorPower + orderPower - Math.max(0, seed.width - 3)*3, seed.label);
+  });
+
+  return Object.values(scored)
+    .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair))
+    .slice(0,5);
+}
+
+function orderedPairSeeds(row, formulas, kind){
+  const a = row?.digits || [];
+  if(a.length < 4) return [];
+  const out = [];
+  const add = (pair, label, bonus=0, width=2) => {
+    if(/^\d{2}$/.test(pair)) out.push({pair, label, bonus, width});
+  };
+  const pair = (x,y) => `${mod10(x)}${mod10(y)}`;
+  const root = digitalRoot(sumDigits(row));
+  const dayIdx = DAYS.indexOf(row.day);
+  const dayKey = dayIdx < 0 ? 0 : dayIdx + 1;
+
+  if(kind === 'AK'){
+    add(pair(a[0],a[1]), 'carry AK', 44);
+    add(pair(mod10(9-a[0]), mod10(10-a[1])), 'mirror AK', 38);
+    add(pair(mod10(10-a[0]), mod10(9-a[1])), 'mirror silang AK', 34);
+    add(pair(mod10(a[0]+a[2]), mod10(a[1]+a[3])), 'AK dari silang posisi', 36);
+    add(pair(mod10(a[0]+a[3]), mod10(a[1]+a[2])), 'AK sudut-tengah', 34);
+    add(pair(mod10(a[0]+root), mod10(a[1]+dayKey)), 'AK root-hari', 30);
+    add(pair(mod10(a[0]+6), mod10(a[1]+4)), 'AK golden 6/4', 28);
+  }else{
+    add(pair(a[2],a[3]), 'carry LE', 44);
+    add(pair(mod10(9-a[2]), mod10(10-a[3])), 'mirror LE', 38);
+    add(pair(mod10(10-a[2]), mod10(9-a[3])), 'mirror silang LE', 34);
+    add(pair(mod10(a[1]+a[2]), mod10(a[0]+a[3])), 'LE tengah-sudut', 36);
+    add(pair(mod10(a[2]+root), mod10(a[3]+dayKey)), 'LE root-hari', 30);
+    add(pair(mod10(a[2]+6), mod10(a[3]+4)), 'LE golden 6/4', 28);
+  }
+
+  const gate = singlePairGateDigits(row);
+  if(gate.length >= 2){
+    add(`${gate[0]}${gate[1]}`, 'gerbang pasangan urut', 32);
+    add(`${gate[Math.min(2, gate.length-1)]}${gate[0]}`, 'gerbang silang', 24);
+  }
+  const info = twinInfo(row);
+  if(info.twins.length){
+    const split = twinSplitDigits(row);
+    const mirror = twinMirrorSingleDigits(row);
+    if(mirror.length >= 4) add(`${mirror[0]}${mirror[3]}`, 'cermin tunggal kembar', 46);
+    if(mirror.length >= 2 && split.length) add(`${mirror[1]}${split[0]}`, 'cermin + split kembar', 44);
+    if(split.length >= 2) add(`${split[0]}${split[1]}`, 'pecah kembar langsung', 36);
+  }
+  return out;
+}
 
 function buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget){
   const latest = rows[0];
@@ -736,6 +909,7 @@ function renderResult(r){
     <small>Keluarga: ${escapeHtml(f.family)}. Kunci rumus: ${f.key}.</small>
     <div class="chips">${f.digits.slice(0,10).map((d,i) => `<span class="chip ${i%3===0?'hot':i%3===1?'green':'red'}">${d}</span>`).join('')}</div>
   </div>`).join('');
+  const akleHtml = renderAKLE(r.akle);
   const tableHtml = renderDataTable(r.rows.slice(0,18));
 
   const anchorHtml = r.audit.targetAnchor ? `<div><b>Jangkar hari target</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchor.title)}</li><li>Carry: ${escapeHtml(r.audit.targetAnchor.carry)}</li><li>Cermin: ${escapeHtml(r.audit.targetAnchor.mirror)}</li><li>Gerbang: ${escapeHtml(r.audit.targetAnchor.gate)}</li><li>Root: ${escapeHtml(r.audit.targetAnchor.root)}</li></ul></div>` : '';
@@ -753,13 +927,26 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.3 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, pecah kembar, dan jangkar hari target terakhir.</p>
+      <p class="tagline">Engine V4.4 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, pecah kembar, jangkar hari target terakhir, dan AKLE berurutan.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
+    ${akleHtml}
     <div class="section"><h3>Rumus Dominan Saat Ini</h3><div class="formula-grid">${formulaCards}</div></div>
     <div class="section"><h3>Ranking Digit Berdasarkan Rumus</h3><div class="rank">${topDigits}</div></div>
     ${processHtml}
     <div class="section"><h3>Arsip Terbaru</h3>${tableHtml}</div>
+  </div>`;
+}
+
+
+function renderAKLE(akle){
+  if(!akle) return '';
+  const renderPair = (x,i,type) => `<div class="pair-card ${type}"><b>${x.pair}</b><small>P${i+1}</small><span>${escapeHtml((x.notes || []).join(' • ') || 'formula ordered')}</span></div>`;
+  const ak = (akle.ak || []).map((x,i) => renderPair(x,i,'ak')).join('');
+  const le = (akle.le || []).map((x,i) => renderPair(x,i,'le')).join('');
+  return `<div class="section akle-section"><h3>AKLE Ordered Formula</h3>
+    <p class="tagline">AK adalah dua angka depan. LE adalah dua angka belakang. Urutan dikunci, jadi 23 berbeda dari 32.</p>
+    <div class="akle-grid"><div><h4>AK 5 Pilihan</h4><div class="pair-grid">${ak}</div></div><div><h4>LE 5 Pilihan</h4><div class="pair-grid">${le}</div></div></div>
   </div>`;
 }
 
