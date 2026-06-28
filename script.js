@@ -530,6 +530,7 @@ function buildModel(rows, market){
     u.forEach(d => { rowPresence[d]++; if(gap[d] === N + 1) gap[d] = idx; });
     r.digits.forEach(d => { if(d >= 0 && d <= 9) rawCount[d]++; });
   });
+
   const totalSlots = rows.reduce((s,r) => s + r.digits.filter(d => d >= 0 && d <= 9).length, 0) || 1;
   const freq = rawCount.map(c => c / totalSlots);
   const presence = rowPresence.map(c => c / Math.max(N,1));
@@ -550,7 +551,18 @@ function buildModel(rows, market){
     latestSet.forEach(x => { if(x !== d){ s += pairStats.liftPositive(d, x); c++; } });
     return clamp((c ? s / c : 0) / 0.85, 0, 1);
   });
-  const score = DIGITS.map(d => {
+
+  /*
+    FORMULA V2
+    Kelemahan V1: digit yang kuat secara historis tetapi sedang dingin terlalu turun.
+    V2 menambah lima pembaca pola:
+    1. reboundScore: digit historis kuat yang absen 2-8 draw terakhir.
+    2. neighborScore: rotasi tetangga dari angka terakhir, misalnya 9 membuka 8/0.
+    3. shapeScore: Markov bentuk draw, memakai kemiripan sum, root, odd-even, high-low, dan status kembar.
+    4. positionScore: sinyal posisi ribuan, ratusan, puluhan, satuan.
+    5. antiScore: rem untuk digit yang terlalu padat dalam 3 draw terakhir.
+  */
+  const oldBaseScore = DIGITS.map(d => {
     return 0.16*presence[d] +
       0.11*freq[d]*2.5 +
       0.18*recent[d] +
@@ -562,10 +574,45 @@ function buildModel(rows, market){
       0.05*golden[d] +
       0.05*trendScore[d];
   });
+  const oldScore = normalizeArray(oldBaseScore);
+  const positionPack = buildPositionScore(rows);
+  const positionScore = positionPack.digitScore;
+  const shapeScore = buildShapeMarkovScore(rows, latest);
+  const reboundScore = buildGapReboundScore(rows, presence, recent, mid, gap, latestSet);
+  const neighborScore = buildNeighborEchoScore(rows, latestSet);
+  const antiScore = buildAntiSaturationScore(rows, latestSet);
+
+  const score = DIGITS.map(d => {
+    return 0.38*oldScore[d] +
+      0.20*reboundScore[d] +
+      0.13*neighborScore[d] +
+      0.10*shapeScore[d] +
+      0.10*positionScore[d] +
+      0.09*antiScore[d];
+  });
   const normalizedScore = normalizeArray(score);
   const classMap = classifyDigits(presence);
-  const finalDigits = chooseFinalDigits(normalizedScore, {dayScore, markov, golden, gapScore, latestPairSupport, classMap});
-  const twinScores = buildTwinScore(rows, normalizedScore, dayScore, recent, markov);
+  const finalDigits = chooseFinalDigits(normalizedScore, {
+    dayScore,
+    markov,
+    golden,
+    gapScore,
+    latestPairSupport,
+    classMap,
+    reboundScore,
+    neighborScore,
+    shapeScore,
+    antiScore,
+    positionScore,
+    presence
+  });
+  const twinScores = buildTwinScoreV2(rows, normalizedScore, repeatScore, dayScore, recent, markov, {
+    reboundScore,
+    neighborScore,
+    shapeScore,
+    antiScore,
+    presence
+  });
   const twinDigit = finalDigits.slice().sort((a,b) => twinScores[b] - twinScores[a])[0];
   const chi = chiSquareDigitTest(rows);
   const pairs = topPairs(pairStats.pair, rows.length, 8);
@@ -575,6 +622,7 @@ function buildModel(rows, market){
     digit:d,
     score:normalizedScore[d],
     rawScore:score[d],
+    oldScore:oldScore[d],
     presence:presence[d],
     freq:freq[d],
     recent:recent[d],
@@ -586,6 +634,11 @@ function buildModel(rows, market){
     golden:golden[d],
     repeat:repeatScore[d],
     trend:trendScore[d],
+    rebound:reboundScore[d],
+    neighbor:neighborScore[d],
+    shape:shapeScore[d],
+    position:positionScore[d],
+    anti:antiScore[d],
     twin:twinScores[d],
     className:classMap[d]
   })).sort((a,b) => b.score - a.score);
@@ -711,6 +764,130 @@ function buildRepeatScore(rows){
   return normalizeArray(acc);
 }
 
+function buildPositionScore(rows){
+  const acc = Array.from({length:4}, () => Array(10).fill(0));
+  const den = Array(4).fill(0);
+  rows.slice(0, 24).forEach((r, idx) => {
+    const w = Math.pow(0.82, idx);
+    r.digits.slice(0, 4).forEach((d, pos) => {
+      if(d >= 0 && d <= 9){
+        acc[pos][d] += w;
+        den[pos] += w;
+      }
+    });
+  });
+  const posFreq = acc.map((row, pos) => row.map(v => den[pos] ? v / den[pos] : 0));
+  const digitScore = normalizeArray(DIGITS.map(d => {
+    const vals = posFreq.map(row => row[d]);
+    return 0.55*Math.max(...vals) + 0.45*(vals.reduce((s,v) => s+v, 0) / 4);
+  }));
+  return {digitScore, posFreq};
+}
+
+function sumRoot(n){
+  const r = n % 9;
+  return r === 0 ? 9 : r;
+}
+
+function drawShape(row){
+  const digits = row?.digits || [];
+  const sum = digits.reduce((s,d) => s + d, 0);
+  const odd = digits.filter(d => d % 2 === 1).length;
+  const high = digits.filter(d => d >= 5).length;
+  const counts = countMap(digits);
+  const twin = Object.values(counts).some(v => v >= 2) ? 1 : 0;
+  return {sum, root:sumRoot(sum), odd, high, twin};
+}
+
+function buildShapeMarkovScore(rows, latest){
+  if(!latest) return Array(10).fill(0.5);
+  const chrono = rows.slice().reverse();
+  const target = drawShape(latest);
+  const acc = Array(10).fill(0);
+  let den = 0;
+  for(let i=0;i<chrono.length-1;i++){
+    const s = drawShape(chrono[i]);
+    let sim = 0;
+    sim += 0.28*(1 - Math.abs(s.sum - target.sum) / 36);
+    sim += 0.22*(1 - Math.abs(s.root - target.root) / 8);
+    sim += 0.22*(1 - Math.abs(s.odd - target.odd) / 4);
+    sim += 0.18*(1 - Math.abs(s.high - target.high) / 4);
+    sim += 0.10*(s.twin === target.twin ? 1 : 0);
+    sim = clamp(sim, 0, 1);
+    if(sim > 0.52){
+      const age = chrono.length - 2 - i;
+      const w = Math.pow(sim, 2.1) * Math.pow(0.99, age);
+      den += w;
+      unique(chrono[i+1].digits.filter(d => d >= 0 && d <= 9)).forEach(d => acc[d] += w);
+    }
+  }
+  return acc.map(v => den ? v / den : 0);
+}
+
+function buildGapReboundScore(rows, presence, recent, mid, gap, latestSet){
+  const raw = DIGITS.map(d => {
+    const g = gap[d] || 0;
+    const sweetGap = Math.exp(-Math.pow(g - 5, 2) / (2 * Math.pow(3, 2)));
+    const cold = clamp(mid[d] - recent[d] + 0.15, 0, 1);
+    const notLatest = latestSet.has(d) ? 0.45 : 1;
+    return presence[d] * (0.55*sweetGap + 0.45*cold) * (0.75 + 0.25*notLatest);
+  });
+  return normalizeArray(raw);
+}
+
+function buildNeighborEchoScore(rows, latestSet){
+  const neighbor = new Set();
+  latestSet.forEach(x => {
+    neighbor.add((x + 9) % 10);
+    neighbor.add((x + 1) % 10);
+  });
+  const chrono = rows.slice().reverse();
+  const acc = Array(10).fill(0);
+  let den = 0;
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = new Set(chrono[i].digits.filter(d => d >= 0 && d <= 9));
+    const inter = [...prev].filter(x => latestSet.has(x)).length;
+    const union = new Set([...prev, ...latestSet]).size || 1;
+    const sim = inter / union;
+    if(sim > 0){
+      const age = chrono.length - 2 - i;
+      const w = Math.pow(sim, 1.2) * Math.pow(0.99, age);
+      den += w;
+      prev.forEach(x => {
+        const a = (x + 9) % 10;
+        const b = (x + 1) % 10;
+        const next = new Set(chrono[i+1].digits.filter(d => d >= 0 && d <= 9));
+        if(next.has(a)) acc[a] += w;
+        if(next.has(b)) acc[b] += w;
+      });
+    }
+  }
+  const hist = normalizeArray(acc.map(v => den ? v / den : 0));
+  return normalizeArray(DIGITS.map(d => 0.55*(neighbor.has(d) ? 1 : 0) + 0.45*hist[d]));
+}
+
+function buildAntiSaturationScore(rows, latestSet){
+  const count = Array(10).fill(0);
+  rows.slice(0, 3).forEach(r => {
+    r.digits.forEach(d => { if(d >= 0 && d <= 9) count[d]++; });
+  });
+  const maxCount = Math.max(...count, 1);
+  return DIGITS.map(d => clamp(1 - (count[d] / maxCount) + (latestSet.has(d) ? 0 : 0.18), 0, 1));
+}
+
+function buildTwinScoreV2(rows, digitScore, repeatScore, dayScore, recent, markov, ctx){
+  const oldTwin = buildTwinScore(rows, digitScore, dayScore, recent, markov);
+  return DIGITS.map(d => clamp(
+    0.32*oldTwin[d] +
+    0.22*ctx.reboundScore[d] +
+    0.14*ctx.shapeScore[d] +
+    0.12*ctx.antiScore[d] +
+    0.08*ctx.neighborScore[d] +
+    0.07*ctx.presence[d] +
+    0.05*repeatScore[d],
+  0, 1));
+}
+
 function buildTwinScore(rows, digitScore, dayScore, recent, markov){
   const twinHist = Array(10).fill(0);
   const singleRecent = Array(10).fill(0);
@@ -741,15 +918,33 @@ function classifyDigits(presence){
 
 function chooseFinalDigits(score, ctx){
   const selected = [];
-  const order = DIGITS.slice().sort((a,b) => score[b] - score[a]);
-  order.forEach(d => { if(selected.length < 4) selected.push(d); });
-  const bridgeScore = DIGITS.map(d => {
-    const nonCore = ctx.classMap[d] === 'bridge' ? 0.18 : ctx.classMap[d] === 'mid' ? 0.08 : 0;
-    return score[d]*0.52 + ctx.gapScore[d]*0.14 + ctx.golden[d]*0.12 + ctx.markov[d]*0.12 + ctx.latestPairSupport[d]*0.10 + nonCore;
+  DIGITS.slice().sort((a,b) => score[b] - score[a]).forEach(d => {
+    if(selected.length < 4) selected.push(d);
   });
-  DIGITS.slice().sort((a,b) => bridgeScore[b] - bridgeScore[a]).forEach(d => {
+
+  // Kuota 1: digit rebound. Ini mencegah digit historis kuat seperti 8 atau 0 hilang hanya karena recent window turun.
+  DIGITS.slice().sort((a,b) => {
+    const sa = (ctx.reboundScore?.[a] || 0) + 0.35*(ctx.antiScore?.[a] || 0) + 0.20*(ctx.presence?.[a] || 0) + 0.15*score[a];
+    const sb = (ctx.reboundScore?.[b] || 0) + 0.35*(ctx.antiScore?.[b] || 0) + 0.20*(ctx.presence?.[b] || 0) + 0.15*score[b];
+    return sb - sa;
+  }).forEach(d => {
+    if(selected.length < 5 && !selected.includes(d)) selected.push(d);
+  });
+
+  // Kuota 2: digit rotasi tetangga atau shape. Ini membaca 9→8/0, 5→4/6, dan pola bentuk draw serupa.
+  DIGITS.slice().sort((a,b) => {
+    const sa = 0.55*(ctx.neighborScore?.[a] || 0) + 0.25*(ctx.antiScore?.[a] || 0) + 0.20*(ctx.shapeScore?.[a] || 0);
+    const sb = 0.55*(ctx.neighborScore?.[b] || 0) + 0.25*(ctx.antiScore?.[b] || 0) + 0.20*(ctx.shapeScore?.[b] || 0);
+    return sb - sa;
+  }).forEach(d => {
     if(selected.length < 6 && !selected.includes(d)) selected.push(d);
   });
+
+  // Fallback bila data terlalu pendek.
+  DIGITS.slice().sort((a,b) => score[b] - score[a]).forEach(d => {
+    if(selected.length < 6 && !selected.includes(d)) selected.push(d);
+  });
+
   return selected.slice(0,6).sort((a,b) => score[b] - score[a]);
 }
 
@@ -856,10 +1051,10 @@ function renderReport(r){
   const rankHtml = r.models.map(m => `<div class="rankitem">
     <b>${m.digit}</b>
     <div><div class="bar"><div class="fill" style="width:${clamp(m.score*100,3,100)}%"></div></div>
-    <small>${m.className} • skor=${fmt(m.score,3)} • freq=${pct(m.freq)} • recent=${pct(m.recent)} • hari=${pct(m.day)} • bulan=${pct(m.month)} • markov=${pct(m.markov)} • pair=${pct(m.pair)} • gap=${pct(m.gap)} • golden=${pct(m.golden)}</small></div>
+    <small>${m.className} • skor=${fmt(m.score,3)} • old=${pct(m.oldScore)} • rebound=${pct(m.rebound)} • rotasi=${pct(m.neighbor)} • shape=${pct(m.shape)} • posisi=${pct(m.position)} • anti=${pct(m.anti)} • recent=${pct(m.recent)} • markov=${pct(m.markov)}</small></div>
     <b>${fmt(m.score,3)}</b></div>`).join('');
   const twinHtml = r.models.slice().sort((a,b) => b.twin - a.twin).map(m => `<div class="rankitem">
-    <b>${m.digit}</b><div><small>twin=${fmt(m.twin,3)} • repeat=${pct(m.repeat)} • recent=${pct(m.recent)} • day=${pct(m.day)} • markov=${pct(m.markov)} ${m.digit===r.twinDigit?'• TWIN':''}</small></div><b>${fmt(m.twin,3)}</b></div>`).join('');
+    <b>${m.digit}</b><div><small>twin=${fmt(m.twin,3)} • repeat=${pct(m.repeat)} • rebound=${pct(m.rebound)} • shape=${pct(m.shape)} • anti=${pct(m.anti)} • markov=${pct(m.markov)} ${m.digit===r.twinDigit?'• TWIN':''}</small></div><b>${fmt(m.twin,3)}</b></div>`).join('');
   const pairHtml = r.pairs.map(p => `<div class="rankitem"><b>${p.pair}</b><div><small>Muncul bersama ${p.count} kali dalam ${r.N} baris</small></div><b>${pct(p.rate)}</b></div>`).join('');
   const dayHtml = r.daySummary.map(x => `<div class="rankitem"><b>${escapeHtml(x.key.slice(0,3))}</b><div><small>${escapeHtml(x.key)} • ${x.rows} baris • top digit: ${x.top}</small></div><b>${x.rows}</b></div>`).join('');
   const monthHtml = r.monthSummary.map(x => `<div class="rankitem"><b>${escapeHtml(x.key.replace('Bulan ',''))}</b><div><small>${escapeHtml(x.key)} • ${x.rows} baris • top digit: ${x.top}</small></div><b>${x.rows}</b></div>`).join('');
@@ -883,7 +1078,7 @@ function renderReport(r){
       <h3>Final 6 Digit Utama + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar berbasis riset</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Shortlist ini membaca frekuensi, recent window, hari, bulan, Markov tanpa posisi, pair support, gap, repeat, dan uji golden ratio. Gunakan sebagai bahan belajar pola, bukan kepastian hasil.</p>
+      <p class="tagline">Shortlist V2 membaca frekuensi lama, rebound digit dingin, rotasi tetangga, shape Markov, sinyal posisi, anti-saturation, pair support, gap, repeat, dan golden ratio. Gunakan sebagai bahan belajar pola, bukan kepastian hasil.</p>
     </div>
     <div class="section"><h3>Diagnostik Market</h3>${statsHtml}</div>
     ${backtestHtml}
