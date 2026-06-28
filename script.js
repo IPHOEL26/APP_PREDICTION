@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.0';
+const APP_VERSION = 'IPHOEL Formula Engine V4.1 • Twin Split';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -112,7 +112,8 @@ function buildFormulaPrediction(rows){
   const chrono = rows.slice().reverse();
   const formulas = buildFormulaLibrary();
   const learned = learnFormulaWeights(chrono, formulas);
-  const candidate = scoreCurrent(latest, formulas, learned);
+  const learnedDay = learnDayFormulaWeights(chrono, formulas, latest.day);
+  const candidate = scoreCurrent(latest, formulas, learned, learnedDay);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const targetDay = inferTargetDay(rows);
@@ -151,6 +152,10 @@ function buildFormulaLibrary(){
   add('chainAdj','Rantai berdekatan', 'chain', r => [mod10(r.digits[0]+r.digits[1]),mod10(r.digits[1]+r.digits[2]),mod10(r.digits[2]+r.digits[3]),mod10(r.digits[3]+r.digits[0])]);
   add('chainDiff','Selisih rantai', 'chain', r => [Math.abs(r.digits[0]-r.digits[1])%10,Math.abs(r.digits[1]-r.digits[2])%10,Math.abs(r.digits[2]-r.digits[3])%10,Math.abs(r.digits[3]-r.digits[0])%10]);
   add('outerInner','Luar dalam', 'cross', r => [mod10(r.digits[0]+r.digits[3]),mod10(r.digits[1]+r.digits[2]),mod10(r.digits[0]*r.digits[3]),mod10(r.digits[1]*r.digits[2])]);
+  add('twinSplit','Pecah kembar: t+t, t-t, tunggal+tunggal', 'twin', r => twinSplitDigits(r));
+  add('twinMirrorSingle','Cermin digit tunggal setelah kembar', 'twin', r => twinMirrorSingleDigits(r));
+  add('singlePairGate','Gerbang pasangan tunggal kanan-kiri', 'twin', r => singlePairGateDigits(r));
+  add('dayPairShift','Pasangan digeser kunci hari', 'day', r => dayPairShiftDigits(r));
   add('dateDay','Hari dan tanggal sebagai kunci', 'date', r => {const dayIdx = DAYS.indexOf(r.day); const dateNum = Number(String(r.date || '').slice(0,2)) || 0; const k = mod10((dayIdx < 0 ? 0 : dayIdx) + dateNum); return r.digits.map(d => mod10(d+k));});
   return lib;
 }
@@ -181,7 +186,32 @@ function learnFormulaWeights(chrono, formulas){
   return learned;
 }
 
-function scoreCurrent(latest, formulas, learned){
+
+function learnDayFormulaWeights(chrono, formulas, day){
+  const learned = {};
+  formulas.forEach(f => learned[f.id] = {value:0, hits:0, trials:0, name:f.name, family:f.family});
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = chrono[i];
+    const next = uniqueDigits(chrono[i+1].digits);
+    if(prev.day !== day) continue;
+    formulas.forEach(f => {
+      const out = uniqueDigits(f.fn(prev));
+      if(!out.length) return;
+      const hitDigits = out.filter(d => next.includes(d));
+      learned[f.id].trials += 1;
+      if(hitDigits.length){
+        learned[f.id].hits += hitDigits.length;
+        learned[f.id].value += hitDigits.length * 24 + Math.max(0, 8 - out.length);
+      }
+    });
+  }
+  Object.values(learned).forEach(x => {
+    x.dayKey = Math.max(0, Math.round(x.value / Math.max(1, Math.floor((x.trials || 1) / 2))));
+  });
+  return learned;
+}
+
+function scoreCurrent(latest, formulas, learned, learnedDay){
   const score = Array(10).fill(0);
   const formulaHits = [];
   const familyScore = {};
@@ -190,8 +220,9 @@ function scoreCurrent(latest, formulas, learned){
     const out = uniqueDigits(f.fn(latest));
     if(!out.length) return;
     const key = learned[f.id]?.key || 1;
+    const dayKey = learnedDay?.[f.id]?.dayKey || 0;
     const penalty = Math.max(0, out.length - 6);
-    const power = Math.max(1, key - penalty);
+    const power = Math.max(1, key - penalty) + Math.max(0, dayKey - penalty);
     out.forEach(d => {
       score[d] += power;
       digitTrace[d].push({name:f.name, family:f.family, key:power});
@@ -218,6 +249,15 @@ function scoreCurrent(latest, formulas, learned){
       digitTrace[d].push({name:'Benih kembar setelah non-kembar', family:'twin', key:5});
     });
   }
+  // V4.1: rumus pecah kembar. Ini bukan frekuensi, tetapi operasi langsung dari bentuk draw terbaru.
+  // Jika ada kembar t, maka t+t memberi pintu 8 pada 44, t-t memberi pintu 0, dan dua digit tunggal memberi pintu lain.
+  const twinPack = twinSplitDigits(latest).concat(twinMirrorSingleDigits(latest), singlePairGateDigits(latest));
+  uniqueDigits(twinPack).forEach(d => {
+    score[d] += 70;
+    digitTrace[d].push({name:'Kunci V4.1 pecah kembar dan gerbang tunggal', family:'twin', key:70});
+    familyScore.twin = familyScore.twin || Array(10).fill(0);
+    familyScore.twin[d] += 70;
+  });
   return {score, formulaHits, familyScore, digitTrace};
 }
 
@@ -246,9 +286,67 @@ function chooseFormulaDigits(candidate, latest){
   // Repair: kalau 6 terpilih terlalu didominasi carry lama, ganti yang jejak rumusnya sempit.
   repairNarrowTrace(selected, candidate);
   forceOperationRescue(selected, latest, candidate);
+  forceTwinSplitRescue(selected, latest, candidate);
   return selected.slice(0,6).sort((a,b) => candidate.score[b] - candidate.score[a] || a-b);
 }
 
+
+
+function twinInfo(row){
+  const counts = countMap(row?.digits || []);
+  const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
+  const singles = (row?.digits || []).filter(d => !twins.includes(d));
+  return {twins, singles};
+}
+function twinSplitDigits(row){
+  const info = twinInfo(row);
+  const out = [];
+  info.twins.forEach(t => {
+    out.push(mod10(t+t));
+    out.push(0); // t-t
+    out.push(mod10(t+6));
+    out.push(mod10(t+4));
+  });
+  if(info.singles.length >= 2){
+    out.push(mod10(info.singles.reduce((s,d) => s+d, 0)));
+    out.push(Math.abs(info.singles[0] - info.singles[1]) % 10);
+  }
+  return uniqueDigits(out);
+}
+function twinMirrorSingleDigits(row){
+  const info = twinInfo(row);
+  const out = [];
+  if(info.twins.length){
+    info.singles.forEach(s => {
+      out.push(mod10(10-s));
+      out.push(mod10(9-s));
+      out.push(mod10(s+1));
+      out.push(mod10(s-1));
+    });
+  }
+  return uniqueDigits(out);
+}
+function singlePairGateDigits(row){
+  const a = row?.digits || [];
+  if(a.length < 4) return [];
+  return uniqueDigits([
+    mod10(a[2]+a[3]),
+    mod10(a[1]+a[2]),
+    mod10(a[0]+a[1]),
+    mod10(a[0]+a[2]),
+    mod10(a[1]+a[3]),
+    Math.abs(a[2]-a[3])%10,
+    Math.abs(a[0]-a[3])%10
+  ]);
+}
+function dayPairShiftDigits(row){
+  const a = row?.digits || [];
+  if(a.length < 4) return [];
+  const dayIdx = DAYS.indexOf(row.day);
+  const k = dayIdx < 0 ? 0 : dayIdx + 1;
+  const base = singlePairGateDigits(row);
+  return uniqueDigits(base.map(d => mod10(d+k)).concat(base.map(d => mod10(d-k))));
+}
 
 function operationRescueDigits(latest, candidate){
   const a = latest.digits;
@@ -283,6 +381,27 @@ function forceOperationRescue(selected, latest, candidate){
     if(dPower > vPower){
       selected[selected.indexOf(victim)] = d;
     }
+  });
+}
+
+
+function forceTwinSplitRescue(selected, latest, candidate){
+  const info = twinInfo(latest);
+  if(!info.twins.length) return;
+  const must = uniqueDigits(twinSplitDigits(latest).concat(twinMirrorSingleDigits(latest))).slice(0,4);
+  if(!must.length) return;
+  const locked = new Set();
+  const traceWidth = d => new Set(candidate.digitTrace[d].map(x => x.family)).size;
+  must.forEach(d => {
+    if(selected.includes(d)){ locked.add(d); return; }
+    const victim = selected.slice().filter(x => !locked.has(x) && !must.includes(x)).sort((a,b) => {
+      const sa = candidate.score[a] + 14*traceWidth(a);
+      const sb = candidate.score[b] + 14*traceWidth(b);
+      return sa - sb;
+    })[0];
+    if(victim == null) return;
+    selected[selected.indexOf(victim)] = d;
+    locked.add(d);
   });
 }
 
@@ -328,10 +447,29 @@ function chooseTwinDigit(candidate, finalDigits, latest){
     score[d] += 8 * families.size;
   });
   const a = latest.digits;
+  const counts = countMap(a);
+  const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
+  if(twins.length){
+    const singles = a.filter(d => !twins.includes(d));
+    if(singles.length >= 2){
+      const singleSum = mod10(singles.reduce((s,d) => s+d, 0));
+      return singleSum;
+    }
+    twins.forEach(t => {
+      score[mod10(t+t)] += 220;
+      score[0] += 140;
+      singles.forEach(s => { score[mod10(10-s)] += 160; score[mod10(9-s)] += 120; });
+    });
+  }else{
+    // Jika draw terakhir tidak kembar, kandidat kembar sering lahir dari gerbang pasangan kanan.
+    return mod10(a[2]+a[3]);
+  }
   const directSeeds = [mod10(a[0]+a[1]), mod10(a[1]+a[2]), mod10(a[2]+a[3]), mod10(a[0]+a[3]), digitalRoot(sumDigits(latest)), mod10(9-digitalRoot(sumDigits(latest)))];
   directSeeds.forEach(d => score[d] += 12);
-  return finalDigits.slice().sort((x,y) => score[y] - score[x] || x-y)[0];
+  // Kandidat kembar tidak harus terkunci di 6 digit utama. Ia boleh berdiri sebagai hasil rumus tersendiri.
+  return DIGITS.slice().sort((x,y) => score[y] - score[x] || x-y)[0];
 }
+
 
 function buildLocalFormulaAudit(rows, formulas, learned){
   const latest = rows[0];
@@ -374,7 +512,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine ini membaca operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, dan rumus transisi historis.</p>
+      <p class="tagline">Engine V4.1 membaca operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, dan pecah kembar.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     <div class="section"><h3>Rumus Dominan Saat Ini</h3><div class="formula-grid">${formulaCards}</div></div>
