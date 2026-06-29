@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.5 • KL Guard AKLE';
+const APP_VERSION = 'IPHOEL Formula Engine V4.6 • KL Anchor Guard';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -132,6 +132,7 @@ function buildFormulaPrediction(rows){
   const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   forceAKLEMiddleRescue(finalDigits, akle, candidate);
+  forceTwinAnchorSingleRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
@@ -404,6 +405,7 @@ function chooseFormulaDigits(candidate, latest){
   forceOperationRescue(selected, latest, candidate);
   forceTwinSplitRescue(selected, latest, candidate);
   forceTargetDayAnchorRescue(selected, candidate);
+  forceTwinAnchorSingleRescue(selected, latest, candidate);
   return selected.slice(0,6).sort((a,b) => candidate.score[b] - candidate.score[a] || a-b);
 }
 
@@ -574,6 +576,33 @@ function forceTargetDayAnchorRescue(selected, candidate){
   }
 }
 
+
+function forceTwinAnchorSingleRescue(selected, latest, candidate){
+  const info = twinInfo(latest);
+  if(!info.twins.length || !candidate.targetAnchor) return;
+  const anchorScore = candidate.targetAnchorScore || Array(10).fill(0);
+  const anchorDigits = uniqueDigits((candidate.targetAnchor.digits || []).concat(candidate.targetAnchorHidden || []));
+  const singles = uniqueDigits(info.singles || []);
+  const candidates = singles
+    .filter(d => !selected.includes(d))
+    .filter(d => anchorDigits.includes(d) || (anchorScore[d] || 0) > 0)
+    .sort((a,b) => ((anchorScore[b] || 0) + candidate.score[b]) - ((anchorScore[a] || 0) + candidate.score[a]));
+  if(!candidates.length) return;
+
+  // V4.6: jika latest punya kembar, digit tunggal yang juga muncul di jangkar hari target
+  // harus dijaga, karena sering menjadi K/L. Contoh MAE 2344 + anchor Minggu 0153 → 1370.
+  const rescue = candidates[0];
+  const traceWidth = d => new Set((candidate.digitTrace[d] || []).map(x => x.family)).size;
+  const protectedDigits = new Set();
+  info.twins.forEach(d => protectedDigits.add(Number(d)));
+  singles.forEach(d => { if(selected.includes(d) && anchorDigits.includes(d)) protectedDigits.add(Number(d)); });
+  const victim = selected.slice()
+    .filter(d => !protectedDigits.has(d))
+    .sort((a,b) => (candidate.score[a] + 10*traceWidth(a) + 0.35*(anchorScore[a] || 0)) - (candidate.score[b] + 10*traceWidth(b) + 0.35*(anchorScore[b] || 0)))[0];
+  if(victim == null) return;
+  selected[selected.indexOf(victim)] = rescue;
+}
+
 function formulaMustHave(latest){
   const a = latest.digits;
   const out = [];
@@ -653,29 +682,39 @@ function chooseTwinDigit(candidate, finalDigits, latest){
   const a = latest.digits;
   const counts = countMap(a);
   const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
+  const allowed = uniqueDigits(finalDigits);
+  const chooseFromFinal = (preferred=[]) => {
+    const pref = uniqueDigits(preferred);
+    for(const d of pref){
+      if(allowed.includes(d)) return d;
+    }
+    if(!allowed.length) return 0;
+    return allowed.slice().sort((x,y) => score[y] - score[x] || candidate.score[y] - candidate.score[x] || x-y)[0];
+  };
+
   if(twins.length){
     const singles = a.filter(d => !twins.includes(d));
     const singleSum = singles.length >= 2 ? mod10(singles.reduce((s,d) => s+d, 0)) : null;
-
-    // V4.3: high-boundary twin retention.
-    // Jika kembar terbaru adalah 9 atau 0, jangan otomatis pecah ke jumlah tunggal.
-    // Kasus 9890 → 4139 menunjukkan 99 bisa bertahan sebagai kandidat kembar.
-    if(twins.some(t => t === 9 || t === 0)) return twins.find(t => t === 9 || t === 0);
-
-    // Jika jumlah tunggal punya dukungan rumus, pakai seperti V4.1: 1484 → 99.
-    if(singleSum != null) return singleSum;
-
     twins.forEach(t => {
+      score[t] += 180;
       score[mod10(t+t)] += 220;
       score[0] += 140;
       singles.forEach(s => { score[mod10(10-s)] += 160; score[mod10(9-s)] += 120; });
     });
+
+    // V4.6: kandidat kembar wajib berasal dari 6 digit utama.
+    // Jika seed rumus seperti 55 tidak ada di 6 digit, pilih digit terkuat yang ada di finalDigits.
+    const boundary = twins.find(t => t === 9 || t === 0);
+    const preferred = [];
+    if(boundary != null) preferred.push(boundary);
+    if(singleSum != null) preferred.push(singleSum);
+    preferred.push(...twins, ...twins.map(t => mod10(t+t)), 0);
+    return chooseFromFinal(preferred);
   }else{
-    return mod10(a[2]+a[3]);
+    const seed = mod10(a[2]+a[3]);
+    score[seed] += 160;
+    return chooseFromFinal([seed, digitalRoot(sumDigits(latest)), mod10(9-digitalRoot(sumDigits(latest)))]);
   }
-  const directSeeds = [mod10(a[0]+a[1]), mod10(a[1]+a[2]), mod10(a[2]+a[3]), mod10(a[0]+a[3]), digitalRoot(sumDigits(latest)), mod10(9-digitalRoot(sumDigits(latest)))];
-  directSeeds.forEach(d => score[d] += 12);
-  return DIGITS.slice().sort((x,y) => score[y] - score[x] || x-y)[0];
 }
 
 
@@ -719,6 +758,18 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(orderedPairSeeds(latest, formulas, kind), 50, 'latest');
   if(targetAnchor) pushSeeds(orderedPairSeeds(targetAnchor, formulas, kind), 42, 'anchor hari target');
 
+  // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
+  if(targetAnchor && (targetAnchor.digits || []).length >= 4){
+    const ad = targetAnchor.digits;
+    if(kind === 'AK'){
+      seeds.push({pair:`${ad[1]}${ad[3]}`, width:2, bonus:6500, label:'AK anchor K-E'});
+      seeds.push({pair:`${ad[0]}${ad[3]}`, width:2, bonus:2600, label:'AK anchor A-E'});
+    }else{
+      seeds.push({pair:`${ad[3]}${ad[0]}`, width:2, bonus:2400, label:'LE anchor E-A'});
+      seeds.push({pair:`${ad[3]}${ad[1]}`, width:2, bonus:2200, label:'LE anchor E-K'});
+    }
+  }
+
   // V4.5: AK dan LE dipisah jalurnya.
   // AK mengutamakan pintu depan, sedangkan LE mengutamakan pintu belakang/KL.
   const info = twinInfo(latest);
@@ -734,6 +785,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
       if(mirror.length >= 2 && split.length) seeds.push({pair:`${mirror[1]}${split[0]}`, width:2, bonus:6200, label:'LE mirror-split belakang'});
       if(gate.length && split.length) seeds.push({pair:`${gate[0]}${split[0]}`, width:2, bonus:4300, label:'LE gerbang-split'});
       if(split.length >= 2) seeds.push({pair:`${split[0]}${split[1]}`, width:2, bonus:3800, label:'LE pecah kembar'});
+      if(info.singles.length && split.includes(0)) seeds.push({pair:`${mod10(9-info.singles[0])}0`, width:2, bonus:4700, label:'LE cermin single + zero kembar'});
       if(mirror.length >= 4) seeds.push({pair:`${mirror[3]}${mirror[1]}`, width:2, bonus:2600, label:'LE cermin balik'});
     }
   }
@@ -965,7 +1017,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.5 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, pecah kembar, jangkar hari target terakhir, AKLE berurutan, dan penjaga digit tengah K/L.</p>
+      <p class="tagline">Engine V4.6 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, pecah kembar, jangkar hari target terakhir, AKLE berurutan, dan penjaga digit tengah K/L, twin dari 6 digit utama, dan single-anchor guard.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
