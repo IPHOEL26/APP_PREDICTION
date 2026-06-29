@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.7 • Multi-Day Twin Guard';
+const APP_VERSION = 'IPHOEL Formula Engine V4.8 • AKLE Position Lock';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -859,6 +859,35 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
     }
   }
 
+
+  // V4.8: Position Lock AK/LE.
+  // AK adalah pintu masuk: A-K. LE adalah pintu keluar: L-E.
+  // Jika anchor hari target punya zero-twin, pola sering bergeser dari carry depan + K anchor,
+  // sedangkan LE sering terbuka dari A anchor + cermin A anchor.
+  if(targetAnchor && (targetAnchor.digits || []).length >= 4 && (latest.digits || []).length >= 4){
+    const ad = targetAnchor.digits;
+    const ld = latest.digits;
+    const anchorCounts = countMap(ad);
+    const latestInfo = twinInfo(latest);
+    const anchorHasZeroTwin = (anchorCounts[0] || 0) >= 2;
+    if(anchorHasZeroTwin){
+      if(kind === 'AK'){
+        // Contoh WSV: latest 7550 + anchor Minggu 3100 → pintu masuk 7|1 = 71.
+        seeds.push({pair:`${ld[0]}${ad[1]}`, width:2, bonus:9300, label:'AK position lock: latest A + anchor K'});
+        seeds.push({pair:`${ld[0]}${digitalRoot(sumDigits(targetAnchor))}`, width:2, bonus:4100, label:'AK position lock: latest A + root anchor'});
+      }else{
+        // Contoh WSV: anchor A=3 membuka cermin 9 → 6, maka LE = 36.
+        seeds.push({pair:`${ad[0]}${mod10(9-ad[0])}`, width:2, bonus:9900, label:'LE position lock: anchor A + mirror9'});
+        seeds.push({pair:`${mod10(10-ld[0])}${mod10(ld[0]-1)}`, width:2, bonus:8600, label:'LE position lock: mirror10 latest A + neighbor turun'});
+        if(latestInfo.singles.length){
+          latestInfo.singles.forEach(s => {
+            seeds.push({pair:`${mod10(10-s)}${mod10(s-1)}`, width:2, bonus:4200, label:'LE position lock: single mirror-neighbor'});
+          });
+        }
+      }
+    }
+  }
+
   // V4.5: AK dan LE dipisah jalurnya.
   // AK mengutamakan pintu depan, sedangkan LE mengutamakan pintu belakang/KL.
   const info = twinInfo(latest);
@@ -905,9 +934,38 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
     add(seed.pair, seed.bonus + learnedPoints + digitPower + anchorPower + orderPower - Math.max(0, seed.width - 3)*3, seed.label);
   });
 
-  return Object.values(scored)
-    .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair))
-    .slice(0,5);
+  const ranked = Object.values(scored)
+    .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
+  return applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate).slice(0,5);
+}
+
+function applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate){
+  if(!targetAnchor || !(targetAnchor.digits || []).length || !(latest.digits || []).length) return ranked;
+  const ad = targetAnchor.digits;
+  const ld = latest.digits;
+  const anchorCounts = countMap(ad);
+  const anchorHasZeroTwin = (anchorCounts[0] || 0) >= 2;
+  if(!anchorHasZeroTwin) return ranked;
+
+  const map = {};
+  ranked.forEach(x => map[x.pair] = {...x, notes:[...(x.notes || [])]});
+  const ensure = (pair, points, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!map[pair]) map[pair] = {pair, points:0, notes:[]};
+    map[pair].points = Math.max(map[pair].points, points);
+    if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
+  };
+
+  if(kind === 'AK'){
+    // Jangan biarkan rumus pintu keluar seperti 36 mendominasi AK saat anchor zero-twin aktif.
+    const leExit = new Set([`${ad[0]}${mod10(9-ad[0])}`, `${mod10(10-ld[0])}${mod10(ld[0]-1)}`]);
+    leExit.forEach(p => { if(map[p]) map[p].points *= 0.42; });
+    ensure(`${ld[0]}${ad[1]}`, 11800 + 0.05*((candidate.score || [])[ld[0]] || 0) + 0.05*((candidate.score || [])[ad[1]] || 0), 'AK position lock');
+  }else{
+    ensure(`${ad[0]}${mod10(9-ad[0])}`, 13200 + 0.05*((candidate.score || [])[ad[0]] || 0) + 0.05*((candidate.score || [])[mod10(9-ad[0])] || 0), 'LE position lock');
+    ensure(`${mod10(10-ld[0])}${mod10(ld[0]-1)}`, 12100 + 0.05*((candidate.score || [])[mod10(10-ld[0])] || 0) + 0.05*((candidate.score || [])[mod10(ld[0]-1)] || 0), 'LE position lock');
+  }
+  return Object.values(map).sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
 }
 
 function orderedPairSeeds(row, formulas, kind){
