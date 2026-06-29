@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.6 • KL Anchor Guard';
+const APP_VERSION = 'IPHOEL Formula Engine V4.7 • Multi-Day Twin Guard';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -57,29 +57,38 @@ function parseRows(rawText){
   const rows = [];
   raw.split(/\n+/).map(normalizeLine).filter(Boolean).forEach((line, idx) => {
     const codeMatch = line.match(/\b([A-Z]{2,7}\d*)\s*\[\s*(\d{1,8})\s*\]/i);
-    if(!codeMatch) return;
-    const after = line.slice(line.lastIndexOf(']') + 1);
-    const digits = parseDigitsFromString(after).slice(0,4);
+    // V4.7 Parser Guard:
+    // Kode market dan nomor periode boleh dibaca untuk arsip/fallback urutan,
+    // tetapi rumus utama tetap memakai hari, tanggal, dan 4 digit hasil.
+    const afterBracket = codeMatch ? line.slice(line.lastIndexOf(']') + 1) : line;
+    let digits = codeMatch ? parseDigitsFromString(afterBracket).slice(0,4) : [];
+    if(digits.length < 4){
+      const nums = line.match(/(?<!\d)\d(?!\d)/g) || [];
+      digits = nums.slice(-4).map(Number);
+    }
     if(digits.length < 4) return;
     rows.push({
-      code: codeMatch[1].toUpperCase(),
-      period: Number(codeMatch[2]) || idx + 1,
+      code: codeMatch ? codeMatch[1].toUpperCase() : '',
+      period: codeMatch ? (Number(codeMatch[2]) || 0) : 0,
       date: extractDate(line),
       day: normalizeDay(line),
       digits,
-      raw: line
+      raw: line,
+      inputIndex: idx
     });
   });
   const seen = new Set();
   return rows.filter(r => {
-    const key = `${r.period}|${r.date}|${r.digits.join('')}`;
+    const key = `${r.date}|${r.day}|${r.digits.join('')}`;
     if(seen.has(key)) return false;
     seen.add(key);
     return true;
   }).sort((a,b) => {
+    const dd = dateValue(b.date) - dateValue(a.date);
+    if(dd) return dd;
     const pd = (b.period || 0) - (a.period || 0);
     if(pd) return pd;
-    return dateValue(b.date) - dateValue(a.date);
+    return (a.inputIndex || 0) - (b.inputIndex || 0);
   });
 }
 function parseDigitsFromString(str){
@@ -133,6 +142,8 @@ function buildFormulaPrediction(rows){
   const finalDigits = chooseFormulaDigits(candidate, latest);
   forceAKLEMiddleRescue(finalDigits, akle, candidate);
   forceTwinAnchorSingleRescue(finalDigits, latest, candidate);
+  forceTargetAnchorCarryRescue(finalDigits, latest, candidate);
+  forceTwinSingleMirrorExpandedRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
@@ -406,6 +417,8 @@ function chooseFormulaDigits(candidate, latest){
   forceTwinSplitRescue(selected, latest, candidate);
   forceTargetDayAnchorRescue(selected, candidate);
   forceTwinAnchorSingleRescue(selected, latest, candidate);
+  forceTargetAnchorCarryRescue(selected, latest, candidate);
+  forceTwinSingleMirrorExpandedRescue(selected, latest, candidate);
   return selected.slice(0,6).sort((a,b) => candidate.score[b] - candidate.score[a] || a-b);
 }
 
@@ -601,6 +614,82 @@ function forceTwinAnchorSingleRescue(selected, latest, candidate){
     .sort((a,b) => (candidate.score[a] + 10*traceWidth(a) + 0.35*(anchorScore[a] || 0)) - (candidate.score[b] + 10*traceWidth(b) + 0.35*(anchorScore[b] || 0)))[0];
   if(victim == null) return;
   selected[selected.indexOf(victim)] = rescue;
+}
+
+
+function replaceWeakestForRescue(selected, rescue, candidate, protectedSet){
+  if(selected.includes(rescue)) return;
+  const traceWidth = d => new Set((candidate.digitTrace[d] || []).map(x => x.family)).size;
+  const anchorScore = candidate.targetAnchorScore || Array(10).fill(0);
+  const victim = selected.slice()
+    .filter(d => !protectedSet.has(Number(d)) && d !== rescue)
+    .sort((a,b) => (candidate.score[a] + 10*traceWidth(a) + 0.35*(anchorScore[a] || 0)) - (candidate.score[b] + 10*traceWidth(b) + 0.35*(anchorScore[b] || 0)))[0];
+  if(victim == null) return;
+  selected[selected.indexOf(victim)] = rescue;
+}
+
+function forceTargetAnchorCarryRescue(selected, latest, candidate){
+  if(!candidate.targetAnchor) return;
+  const info = twinInfo(latest);
+  const anchorDigits = uniqueDigits(candidate.targetAnchor.digits || []);
+  if(!anchorDigits.length) return;
+
+  // V4.7: target-day carry guard.
+  // Pada WSV 7550 → target Minggu, anchor Minggu terakhir 3100.
+  // Digit 3 dan 1 adalah carry anchor, tetapi V4.6 hanya menyelamatkan hidden anchor.
+  // Maka jika latest punya kembar atau anchor punya zero/twin, minimal dua carry anchor non-zero dijaga.
+  const anchorCounts = countMap(candidate.targetAnchor.digits || []);
+  const anchorHasTwinOrZero = Object.keys(anchorCounts).some(k => anchorCounts[k] >= 2 || Number(k) === 0);
+  if(!info.twins.length && !anchorHasTwinOrZero) return;
+
+  const anchorScore = candidate.targetAnchorScore || Array(10).fill(0);
+  const nonZeroCarry = anchorDigits.filter(d => d !== 0);
+  const targetCount = info.twins.length ? 2 : 1;
+  const missing = nonZeroCarry
+    .filter(d => !selected.includes(d))
+    .sort((a,b) => (anchorScore[b] + candidate.score[b]) - (anchorScore[a] + candidate.score[a]));
+
+  const protectedSet = new Set();
+  // Jaga satu digit carry latest dan digit kembar terbaru agar rumus terbaru tidak hilang total.
+  uniqueDigits((latest.digits || [])).forEach(d => { if(selected.includes(d) && (d === 0 || info.twins.includes(d) || d === latest.digits[0])) protectedSet.add(Number(d)); });
+  nonZeroCarry.forEach(d => { if(selected.includes(d)) protectedSet.add(Number(d)); });
+
+  missing.slice(0, targetCount).forEach(d => {
+    replaceWeakestForRescue(selected, d, candidate, protectedSet);
+    protectedSet.add(Number(d));
+  });
+}
+
+function forceTwinSingleMirrorExpandedRescue(selected, latest, candidate){
+  const info = twinInfo(latest);
+  if(!info.twins.length) return;
+  const anchorScore = candidate.targetAnchorScore || Array(10).fill(0);
+  const protectedSet = new Set();
+  info.twins.forEach(d => { if(selected.includes(d)) protectedSet.add(Number(d)); });
+  uniqueDigits(candidate.targetAnchor?.digits || []).forEach(d => { if(selected.includes(d)) protectedSet.add(Number(d)); });
+  if(selected.includes(latest.digits[0])) protectedSet.add(Number(latest.digits[0]));
+
+  // V4.7: expanded single mirror guard.
+  // Untuk latest 7550, digit tunggal 7 membuka 3 lewat 10-7 dan 6 lewat 7-1.
+  // V4.6 hanya mengambil slice awal dari pecah kembar sehingga 6 bisa tertinggal.
+  const priority = [];
+  uniqueDigits(info.singles || []).forEach(s => {
+    if(s !== 0){
+      priority.push(mod10(10-s));
+      priority.push(mod10(s-1));
+      priority.push(mod10(9-s));
+      priority.push(mod10(s+1));
+    }else{
+      priority.push(1,9,0);
+    }
+  });
+  const candidates = uniqueDigits(priority)
+    .filter(d => !selected.includes(d))
+    .filter(d => (anchorScore[d] || 0) > 0 || (candidate.score[d] || 0) > 0);
+  if(!candidates.length) return;
+
+  const rescue = candidates[0];
+  replaceWeakestForRescue(selected, rescue, candidate, protectedSet);
 }
 
 function formulaMustHave(latest){
@@ -895,7 +984,7 @@ function buildSlowStages(rows){
   return [
     {title:'Tahap 1 • Menyusun kronologi', icon:'①', delay:850, desc:`Membaca ${rows.length} baris dari data paling lama ke paling baru.`, items:earlyPairs},
     {title:'Tahap 2 • Membaca transisi harian', icon:'②', delay:980, desc:'Menguji rumus dari satu hari ke hari berikutnya. App mencari operasi yang pernah menembus draw sesudahnya.', items:recentPairs},
-    {title:'Tahap 3 • Membaca hari yang sama per pekan', icon:'③', delay:980, desc:'Menguji relasi seperti Senin ke Senin, Jumat ke Jumat, dan target hari berikutnya. V4.5 juga mengambil angka hari target terakhir sebagai jangkar rumus dan menjaga digit tengah K/L.', items:weekPairs.length ? weekPairs : ['Belum cukup pasangan hari yang sama untuk dibaca.']},
+    {title:'Tahap 3 • Membaca hari yang sama per pekan', icon:'③', delay:980, desc:'Menguji relasi seperti Senin ke Senin, Jumat ke Jumat, dan target hari berikutnya. V4.7 juga membaca jangkar hari target, carry anchor, hidden anchor, single-mirror, dan pola kembar menyebar.', items:weekPairs.length ? weekPairs : ['Belum cukup pasangan hari yang sama untuk dibaca.']},
     {title:'Tahap 4 • Membaca operasi angka terbaru', icon:'④', delay:900, desc:`Latest ${latest.day || '-'} ${latest.digits.join(' ')} dibedah dengan tambah, kurang, kali, cermin, root, hari, dan pecah kembar.`, items:op},
     {title:'Tahap 5 • Mengunci 6 digit formula', icon:'⑤', delay:640, desc:'Menggabungkan kunci harian, kunci pekanan, operasi kembar, cermin, tetangga, root, golden, Fibonacci, affine, dan chain.', items:['Hasil akhir ditampilkan setelah semua tahap selesai.']}
   ];
@@ -1017,7 +1106,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.6 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, pecah kembar, jangkar hari target terakhir, AKLE berurutan, dan penjaga digit tengah K/L, twin dari 6 digit utama, dan single-anchor guard.</p>
+      <p class="tagline">Engine V4.7 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, dan parser date-first.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
