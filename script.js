@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.9 • Schedule-Aware Carry Lock';
+const APP_VERSION = 'IPHOEL Formula Engine V5.0 • Twin Lab Boundary Lock';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -141,6 +141,7 @@ function buildFormulaPrediction(rows){
   candidate.transitionProfile = transitionProfile;
   applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
   applyTransitionCarryProfile(candidate, latest, transitionProfile);
+  applyBoundaryTailMirrorCluster(candidate, latest, targetAnchor, transitionProfile);
   const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   forceAKLEMiddleRescue(finalDigits, akle, candidate);
@@ -148,8 +149,10 @@ function buildFormulaPrediction(rows){
   forceTargetAnchorCarryRescue(finalDigits, latest, candidate);
   forceTwinSingleMirrorExpandedRescue(finalDigits, latest, candidate);
   forceTransitionCarryRescue(finalDigits, latest, candidate);
+  forceBoundaryTailMirrorRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
+  audit.twinLab = buildTwinLabAudit(candidate.twinAudit);
   audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
   audit.transitionProfile = buildTransitionProfileAudit(transitionProfile, latest);
   audit.process = buildProcessCards(rows, formulas);
@@ -795,6 +798,139 @@ function buildTransitionProfileAudit(profile, latest){
 
 function posName(index){return ['A','K','L','E'][index] || String(index);}
 
+
+function boundaryTailMirrorDigits(latest){
+  const a = latest?.digits || [];
+  if(a.length < 4) return [];
+  const e = a[3];
+  const root = digitalRoot(sumDigits(latest));
+  const out = [mod10(9-e), mod10(10-e), mod10(e-1), mod10(e+1)];
+  // Jika ekor berada pada batas cincin 9/0, root sering menjadi kandidat kembar/ekor.
+  if(e === 9 || e === 0) out.push(root, mod10(root+1), mod10(root-1));
+  return uniqueDigits(out);
+}
+
+function applyBoundaryTailMirrorCluster(candidate, latest, targetAnchor, profile){
+  candidate.boundaryTailScore = Array(10).fill(0);
+  candidate.boundaryTailDigits = [];
+  const a = latest?.digits || [];
+  if(a.length < 4) return;
+  const e = a[3];
+  const root = digitalRoot(sumDigits(latest));
+  const counts = countMap(a);
+  const latestHasTwin = Object.values(counts).some(v => v >= 2);
+  const isBoundaryTail = e === 9 || e === 0;
+  if(!isBoundaryTail) return;
+
+  const anchorDigits = uniqueDigits(targetAnchor?.digits || []);
+  const anchorHasBoundary = anchorDigits.includes(0) || anchorDigits.includes(9);
+  const profileBonus = profile && profile.total ? Math.round(120 * ((profile.positionCarryRate?.[3] || 0) + (profile.positionCarryRate?.[0] || 0))) : 0;
+  const add = (d, amount, note) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.boundaryTailScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, note, 'boundaryTail');
+  };
+
+  const mirror9 = mod10(9-e);
+  const mirror10 = mod10(10-e);
+  const down = mod10(e-1);
+  const up = mod10(e+1);
+  candidate.boundaryTailDigits = uniqueDigits([mirror9, mirror10, down, up, root]);
+
+  add(mirror10, 980 + profileBonus + (anchorHasBoundary ? 160 : 0), 'Boundary tail mirror10 lock');
+  add(down, 920 + profileBonus + (!latestHasTwin ? 180 : 0), 'Boundary tail neighbor-down lock');
+  add(root, 1080 + profileBonus + (!latestHasTwin ? 260 : 0), 'Boundary tail root twin seed');
+  add(mirror9, 680 + (anchorHasBoundary ? 120 : 0), 'Boundary tail mirror9 lock');
+  add(up, 420, 'Boundary tail neighbor-up support');
+}
+
+function forceBoundaryTailMirrorRescue(selected, latest, candidate){
+  const a = latest?.digits || [];
+  if(a.length < 4 || !candidate.boundaryTailDigits?.length) return;
+  const e = a[3];
+  if(e !== 9 && e !== 0) return;
+  const root = digitalRoot(sumDigits(latest));
+  const priority = uniqueDigits([mod10(10-e), mod10(e-1), root, mod10(9-e), mod10(e+1)]);
+  // Jangan hitung digit ekor asli sebagai rescue; yang dicari adalah pantulan 9/10 dan root.
+  const must = priority.filter(d => d !== e).slice(0,3);
+  const present = must.filter(d => selected.includes(d)).length;
+  const need = Math.max(0, 2 - present);
+  if(!need) return;
+
+  const protectedSet = new Set();
+  // Jaga dua skor utama umum dan carry transisi supaya rescue tidak menghapus struktur utama.
+  DIGITS.slice().sort((x,y) => candidate.score[y]-candidate.score[x]).slice(0,2).forEach(d => { if(selected.includes(d)) protectedSet.add(Number(d)); });
+  (candidate.transitionProfile?.positionCarryRate || []).forEach((rate,idx) => {
+    if(rate >= 0.40 && selected.includes(a[idx])) protectedSet.add(Number(a[idx]));
+  });
+  const addOne = d => {
+    if(selected.includes(d)) return;
+    replaceWeakestForRescue(selected, d, candidate, protectedSet);
+    protectedSet.add(Number(d));
+  };
+  must.filter(d => !selected.includes(d)).slice(0, need).forEach(addOne);
+}
+
+function buildTwinLabScores(candidate, finalDigits, latest){
+  const a = latest?.digits || [];
+  const score = Array(10).fill(0);
+  const reasons = Array.from({length:10}, () => []);
+  const add = (d, amount, reason) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    score[d] += amount;
+    if(reason && reasons[d].length < 6) reasons[d].push(reason);
+  };
+  DIGITS.forEach(d => {
+    const families = new Set((candidate.digitTrace?.[d] || []).map(x => x.family));
+    add(d, 0.16*(candidate.score?.[d] || 0), 'skor formula dasar');
+    add(d, 16*families.size, 'lebar keluarga rumus');
+    add(d, 0.38*((candidate.targetAnchorScore || [])[d] || 0), 'jangkar hari target');
+    add(d, 0.52*((candidate.boundaryTailScore || [])[d] || 0), 'boundary-tail lab');
+    if((finalDigits || []).includes(d)) add(d, 360, 'masuk 6 digit formula');
+  });
+  if(a.length >= 4){
+    const counts = countMap(a);
+    const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
+    const root = digitalRoot(sumDigits(latest));
+    const seedLE = mod10(a[2]+a[3]);
+    const e = a[3];
+    if(twins.length){
+      const singles = a.filter(d => !twins.includes(d));
+      twins.forEach(t => {
+        add(t, 260, 'carry digit kembar latest');
+        add(mod10(t+t), 300, 'pecah kembar t+t');
+        add(0, 180, 'pecah kembar t-t');
+      });
+      singles.forEach(s => {
+        add(mod10(10-s), 220, 'cermin10 digit tunggal setelah kembar');
+        add(mod10(9-s), 170, 'cermin9 digit tunggal setelah kembar');
+      });
+    }else{
+      add(seedLE, 220, 'L+E non-kembar');
+      add(root, 520, 'root total non-kembar');
+      add(mod10(9-root), 210, 'cermin root non-kembar');
+      if(e === 9 || e === 0){
+        add(root, 720, 'root twin setelah ekor boundary 9/0');
+        add(mod10(e-1), 560, 'neighbor turun ekor boundary');
+        add(mod10(10-e), 520, 'mirror10 ekor boundary');
+        add(mod10(9-e), 360, 'mirror9 ekor boundary');
+      }
+    }
+  }
+  const ranked = DIGITS.map(d => ({digit:d, points:score[d], reasons:reasons[d]})).sort((x,y) => y.points - x.points || x.digit-y.digit);
+  return ranked;
+}
+
+function buildTwinLabAudit(twinAudit){
+  if(!twinAudit || !twinAudit.ranked) return null;
+  return {
+    title: `Twin Lab memilih ${twinAudit.chosen}${twinAudit.chosen}`,
+    ranked: twinAudit.ranked.slice(0,5).map(x => `${x.digit}${x.digit}: ${Math.round(x.points)} poin (${x.reasons.slice(0,3).join(', ') || '-'})`)
+  };
+}
+
 function formulaMustHave(latest){
   const a = latest.digits;
   const out = [];
@@ -863,50 +999,40 @@ function forceAKLEMiddleRescue(selected, akle, candidate){
 }
 
 function chooseTwinDigit(candidate, finalDigits, latest){
-  const score = Array(10).fill(0);
-  const formulaByDigit = candidate.digitTrace;
-  DIGITS.forEach(d => {
-    const families = new Set(formulaByDigit[d].map(x => x.family));
-    score[d] += candidate.score[d];
-    score[d] += 8 * families.size;
-    score[d] += 0.45 * ((candidate.targetAnchorScore || [])[d] || 0);
-  });
-  const a = latest.digits;
+  const ranked = buildTwinLabScores(candidate, finalDigits, latest);
+  const a = latest?.digits || [];
+  const allowed = uniqueDigits(finalDigits);
   const counts = countMap(a);
   const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
-  const allowed = uniqueDigits(finalDigits);
-  const chooseFromFinal = (preferred=[]) => {
-    const pref = uniqueDigits(preferred);
-    for(const d of pref){
-      if(allowed.includes(d)) return d;
-    }
-    if(!allowed.length) return 0;
-    return allowed.slice().sort((x,y) => score[y] - score[x] || candidate.score[y] - candidate.score[x] || x-y)[0];
-  };
+  const root = digitalRoot(sumDigits(latest));
+  const e = a[3];
 
-  if(twins.length){
+  let chosen;
+  if(!twins.length && (e === 9 || e === 0)){
+    // V5.0: pada non-kembar dengan ekor 9/0, kandidat kembar tidak boleh dikunci oleh L+E saja.
+    // Root dan pantulan ekor diberi hak memilih walaupun sebelumnya kalah oleh pair generik.
+    const priority = uniqueDigits([root, mod10(e-1), mod10(10-e), mod10(9-e), mod10(a[2]+a[3])]);
+    chosen = ranked
+      .filter(x => priority.includes(x.digit))
+      .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
+  }else if(twins.length){
     const singles = a.filter(d => !twins.includes(d));
     const singleSum = singles.length >= 2 ? mod10(singles.reduce((s,d) => s+d, 0)) : null;
-    twins.forEach(t => {
-      score[t] += 180;
-      score[mod10(t+t)] += 220;
-      score[0] += 140;
-      singles.forEach(s => { score[mod10(10-s)] += 160; score[mod10(9-s)] += 120; });
-    });
-
-    // V4.6: kandidat kembar wajib berasal dari 6 digit utama.
-    // Jika seed rumus seperti 55 tidak ada di 6 digit, pilih digit terkuat yang ada di finalDigits.
     const boundary = twins.find(t => t === 9 || t === 0);
-    const preferred = [];
-    if(boundary != null) preferred.push(boundary);
-    if(singleSum != null) preferred.push(singleSum);
-    preferred.push(...twins, ...twins.map(t => mod10(t+t)), 0);
-    return chooseFromFinal(preferred);
+    const priority = uniqueDigits([boundary, singleSum, ...twins, ...twins.map(t => mod10(t+t)), 0].filter(x => x != null));
+    chosen = ranked
+      .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * 0.82))
+      .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
   }else{
     const seed = mod10(a[2]+a[3]);
-    score[seed] += 160;
-    return chooseFromFinal([seed, digitalRoot(sumDigits(latest)), mod10(9-digitalRoot(sumDigits(latest)))]);
+    const priority = uniqueDigits([seed, root, mod10(9-root)]);
+    chosen = ranked
+      .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * 0.90))
+      .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
   }
+  if(chosen == null) chosen = ranked.find(x => allowed.includes(x.digit))?.digit ?? ranked[0]?.digit ?? 0;
+  candidate.twinAudit = {chosen, ranked};
+  return chosen;
 }
 
 
@@ -1054,6 +1180,11 @@ function transitionCarryPairSeeds(latest, candidate, kind){
   const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
 
   if(kind === 'AK'){
+    const e = a[3];
+    if(e === 9 || e === 0){
+      add(`${mod10(9-e)}${mod10(10-e)}`, 17600, 'AK boundary-tail mirror9/10');
+      add(`${mod10(10-e)}${mod10(e-1)}`, 9400, 'AK boundary-tail mirror10/down');
+    }
     // Jika K latest sering carry pada transisi jadwal ini, A dicari dari pembuka rumus terkuat:
     // mirror A, jumlah K+L, dan root. Ini menutup kasus 3428 → 6428: K=4 dijaga, A=6 dibuka oleh 9-3 dan 4+2.
     if(rate(1) >= 0.34){
@@ -1066,6 +1197,13 @@ function transitionCarryPairSeeds(latest, candidate, kind){
       add(`${a[0]}${a[1]}`, 7600 + Math.round(900*(rate(0)+rate(1))), 'AK transition: carry A-K');
     }
   }else{
+    const e = a[3];
+    if(e === 9 || e === 0){
+      const root = digitalRoot(sumDigits(latest));
+      add(`${root}${root}`, 18800, 'LE root-twin boundary-tail');
+      add(`${mod10(e-1)}${mod10(e-1)}`, 11800, 'LE neighbor-down twin boundary-tail');
+      add(`${mod10(10-e)}${mod10(e-1)}`, 7600, 'LE mirror10/down boundary-tail');
+    }
     // Jika L dan E latest punya riwayat carry, pair LE asli wajib naik ke kandidat utama.
     // Ini menutup kasus 3428 → 6428: L=2 dan E=8 tidak boleh kalah oleh anchor/pair generik.
     if(rate(2) >= 0.25 && rate(3) >= 0.34){
@@ -1093,10 +1231,19 @@ function applyAKLETransitionLock(ranked, kind, latest, candidate){
     if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
   };
 
+  if(kind === 'AK' && (a[3] === 9 || a[3] === 0)){
+    const e = a[3];
+    ensure(`${mod10(9-e)}${mod10(10-e)}`, 18200, 'AK boundary-tail lock');
+  }
   if(kind === 'AK' && rate(1) >= 0.34){
     const k = a[1];
     ensure(`${mod10(9-a[0])}${k}`, 15100 + 700*rate(1), 'AK transition lock');
     ensure(`${mod10(a[1]+a[2])}${k}`, 14900 + 700*rate(1), 'AK transition lock');
+  }
+  if(kind === 'LE' && (a[3] === 9 || a[3] === 0)){
+    const root = digitalRoot(sumDigits(latest));
+    ensure(`${root}${root}`, 19400, 'LE root-twin boundary lock');
+    ensure(`${mod10(a[3]-1)}${mod10(a[3]-1)}`, 12900, 'LE neighbor-down twin boundary lock');
   }
   if(kind === 'LE' && rate(2) >= 0.25 && rate(3) >= 0.34){
     ensure(`${a[2]}${a[3]}`, 15600 + 700*(rate(2)+rate(3)), 'LE transition lock');
@@ -1328,12 +1475,14 @@ function renderResult(r){
 
   const anchorHtml = r.audit.targetAnchor ? `<div><b>Jangkar hari target</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchor.title)}</li><li>Carry: ${escapeHtml(r.audit.targetAnchor.carry)}</li><li>Cermin: ${escapeHtml(r.audit.targetAnchor.mirror)}</li><li>Gerbang: ${escapeHtml(r.audit.targetAnchor.gate)}</li><li>Root: ${escapeHtml(r.audit.targetAnchor.root)}</li></ul></div>` : '';
   const transitionHtml = r.audit.transitionProfile ? `<div><b>Schedule-aware carry</b><ul class="process-list small"><li>${escapeHtml(r.audit.transitionProfile.title)}</li><li>Total sampel: ${escapeHtml(r.audit.transitionProfile.total)}</li><li>${escapeHtml(r.audit.transitionProfile.latestCarry)}</li>${r.audit.transitionProfile.samples.slice(0,5).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
+  const twinLabHtml = r.audit.twinLab ? `<div><b>Twin Lab</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinLab.title)}</li>${r.audit.twinLab.ranked.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
     <div class="audit-columns">
       <div><b>Transisi harian terbaru</b><ul class="process-list small">${r.audit.process.daily.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
       <div><b>Hari sama per pekan</b><ul class="process-list small">${r.audit.process.weeklyLatest.concat(r.audit.process.weeklyTarget).slice(0,7).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Belum cukup pasangan pekanan.</li>'}</ul></div>
       ${anchorHtml}
       ${transitionHtml}
+      ${twinLabHtml}
       <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
     </div>
   </div>` : '';
@@ -1343,7 +1492,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.9 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, dan transition carry lock.</p>
+      <p class="tagline">Engine V5.0 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, dan twin lab root lock.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
