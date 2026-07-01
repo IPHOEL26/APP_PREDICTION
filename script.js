@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V5.0 • Twin Lab Boundary Lock';
+const APP_VERSION = 'IPHOEL Formula Engine V5.1 • Adaptive Twin Cycle Spread';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -132,6 +132,7 @@ function buildFormulaPrediction(rows){
   const formulas = buildFormulaLibrary();
   const targetDay = inferTargetDay(rows);
   const transitionProfile = buildTransitionProfile(rows, targetDay);
+  const twinCycleProfile = buildTwinCycleProfile(rows, targetDay);
   const learned = learnFormulaWeights(chrono, formulas);
   const learnedDay = learnDayFormulaWeights(chrono, formulas, latest.day);
   const learnedWeekLatest = learnWeekFormulaWeights(chrono, formulas, latest.day);
@@ -139,9 +140,11 @@ function buildFormulaPrediction(rows){
   const targetAnchor = findTargetDayAnchor(rows, targetDay);
   const candidate = scoreCurrent(latest, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget);
   candidate.transitionProfile = transitionProfile;
+  candidate.twinCycleProfile = twinCycleProfile;
   applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
   applyTransitionCarryProfile(candidate, latest, transitionProfile);
   applyBoundaryTailMirrorCluster(candidate, latest, targetAnchor, transitionProfile);
+  applyPostTwinAdaptiveSpread(candidate, latest, targetAnchor, transitionProfile, twinCycleProfile);
   const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   forceAKLEMiddleRescue(finalDigits, akle, candidate);
@@ -150,13 +153,15 @@ function buildFormulaPrediction(rows){
   forceTwinSingleMirrorExpandedRescue(finalDigits, latest, candidate);
   forceTransitionCarryRescue(finalDigits, latest, candidate);
   forceBoundaryTailMirrorRescue(finalDigits, latest, candidate);
+  forcePostTwinSpreadRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.twinLab = buildTwinLabAudit(candidate.twinAudit);
+  audit.twinCycle = buildTwinCycleAudit(twinCycleProfile);
   audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
   audit.transitionProfile = buildTransitionProfileAudit(transitionProfile, latest);
   audit.process = buildProcessCards(rows, formulas);
-  return {rows, latest, targetDay, targetAnchor, transitionProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
+  return {rows, latest, targetDay, targetAnchor, transitionProfile, twinCycleProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
 }
 
 function buildFormulaLibrary(){
@@ -701,6 +706,222 @@ function forceTwinSingleMirrorExpandedRescue(selected, latest, candidate){
 }
 
 
+
+function buildTwinCycleProfile(rows, targetDay){
+  const latest = rows[0] || {};
+  const chrono = rows.slice().reverse();
+  const latestTwins = twinInfo(latest).twins;
+  const profile = {
+    fromDay: latest.day || '-',
+    toDay: targetDay || '-',
+    latestTwins,
+    total:0,
+    targetNextTwin:0,
+    targetPrevTwinCases:0,
+    targetSameTwinRepeat:0,
+    marketPrevTwinCases:0,
+    marketSameTwinRepeat:0,
+    marketNextTwinAfterTwin:0,
+    sameTwinRepeatRate:0,
+    marketSameTwinRepeatRate:0,
+    nextTwinAfterTwinRate:0,
+    targetTwinRate:0,
+    nextTwinDigits:{},
+    cooldownActive:false,
+    samples:[]
+  };
+  const addTwinCounts = (digits) => {
+    twinInfo({digits}).twins.forEach(d => profile.nextTwinDigits[d] = (profile.nextTwinDigits[d] || 0) + 1);
+  };
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = chrono[i];
+    const next = chrono[i+1];
+    const prevTwins = twinInfo(prev).twins;
+    const nextTwins = twinInfo(next).twins;
+    if(prevTwins.length){
+      profile.marketPrevTwinCases += 1;
+      if(nextTwins.length) profile.marketNextTwinAfterTwin += 1;
+      if(prevTwins.some(d => nextTwins.includes(d))) profile.marketSameTwinRepeat += 1;
+    }
+    if(prev.day === profile.fromDay && next.day === profile.toDay){
+      profile.total += 1;
+      if(nextTwins.length){
+        profile.targetNextTwin += 1;
+        addTwinCounts(next.digits);
+      }
+      if(prevTwins.length){
+        profile.targetPrevTwinCases += 1;
+        if(prevTwins.some(d => nextTwins.includes(d))) profile.targetSameTwinRepeat += 1;
+      }
+      if(profile.samples.length < 8){
+        profile.samples.push(`${prev.day} ${prev.digits.join('')} → ${next.day} ${next.digits.join('')} | prev twin ${prevTwins.join('') || '-'} | next twin ${nextTwins.join('') || '-'}`);
+      }
+    }
+  }
+  profile.sameTwinRepeatRate = profile.targetPrevTwinCases ? profile.targetSameTwinRepeat / profile.targetPrevTwinCases : 0;
+  profile.marketSameTwinRepeatRate = profile.marketPrevTwinCases ? profile.marketSameTwinRepeat / profile.marketPrevTwinCases : 0;
+  profile.nextTwinAfterTwinRate = profile.marketPrevTwinCases ? profile.marketNextTwinAfterTwin / profile.marketPrevTwinCases : 0;
+  profile.targetTwinRate = profile.total ? profile.targetNextTwin / profile.total : 0;
+  profile.cooldownActive = !!(latestTwins.length && profile.marketPrevTwinCases >= 6 && profile.marketSameTwinRepeatRate <= 0.12);
+  return profile;
+}
+
+function buildTwinCycleAudit(profile){
+  if(!profile) return null;
+  const nextTwinDigits = Object.entries(profile.nextTwinDigits || {})
+    .sort((a,b) => b[1]-a[1] || Number(a[0])-Number(b[0]))
+    .map(([d,c]) => `${d}${d}:${c}`)
+    .join(' | ') || '-';
+  return {
+    title:`Twin cycle ${profile.fromDay} → ${profile.toDay}`,
+    latestTwins:(profile.latestTwins || []).join(' ') || '-',
+    sameRepeat:`${profile.targetSameTwinRepeat}/${profile.targetPrevTwinCases || 0} target, ${profile.marketSameTwinRepeat}/${profile.marketPrevTwinCases || 0} market`,
+    nextTwin:`${profile.targetNextTwin}/${profile.total || 0} target-day transition`,
+    nextTwinDigits,
+    cooldown: profile.cooldownActive ? 'aktif: kembar sama tidak dipaksa ulang' : 'normal',
+    samples: profile.samples || []
+  };
+}
+
+function applyPostTwinAdaptiveSpread(candidate, latest, targetAnchor, profile, twinCycleProfile){
+  candidate.postTwinSpreadScore = Array(10).fill(0);
+  candidate.postTwinSpreadDigits = [];
+  candidate.twinCooldown = {active:false, digits:[], note:''};
+  const info = twinInfo(latest);
+  const a = latest?.digits || [];
+  if(!info.twins.length || a.length < 4) return;
+
+  const cooldownActive = !!(twinCycleProfile?.cooldownActive);
+  candidate.twinCooldown = {
+    active:cooldownActive,
+    digits:info.twins.slice(),
+    note: cooldownActive ? 'Riwayat menunjukkan kembar yang sama sangat jarang berulang langsung.' : 'Tidak ada cooldown kuat.'
+  };
+
+  const add = (d, amount, note) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.postTwinSpreadScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, note, 'postTwinSpread');
+  };
+
+  const priority = [];
+  const pushPriority = (d) => { d = Number(d); if(Number.isInteger(d) && d >= 0 && d <= 9 && !priority.includes(d)) priority.push(d); };
+
+  info.twins.forEach(t => {
+    const split = mod10(t+t);
+    pushPriority(split);
+    add(split, 1180 + (cooldownActive ? 260 : 0), 'Post-twin spread: pecah kembar t+t');
+    add(mod10(t+6), 420, 'Post-twin spread: twin +6');
+    add(mod10(t+4), 360, 'Post-twin spread: twin +4');
+    if(cooldownActive){
+      add(t, -520, 'Twin cooldown: kembar sama tidak dipaksa ulang');
+    }
+  });
+
+  if(targetAnchor && (targetAnchor.digits || []).length >= 4){
+    const ad = targetAnchor.digits;
+    const anchorBack = mod10(ad[2] + ad[3]);
+    const anchorMid = mod10(ad[1] + ad[2]);
+    const anchorCross = mod10(ad[0] + ad[2]);
+    const mirrorL10 = mod10(10 - ad[2]);
+    const mirrorL9 = mod10(9 - ad[2]);
+    const mirrorK10 = mod10(10 - ad[1]);
+    [anchorBack, anchorMid, mirrorL10, anchorCross, mirrorK10, mirrorL9].forEach(pushPriority);
+    add(anchorBack, 1160 + (cooldownActive ? 260 : 0), 'Post-twin spread: anchor L+E');
+    add(anchorMid, 1040 + (cooldownActive ? 180 : 0), 'Post-twin spread: anchor K+L');
+    add(mirrorL10, 980 + (cooldownActive ? 220 : 0), 'Post-twin spread: mirror10 L anchor');
+    add(anchorCross, 640, 'Post-twin spread: anchor A+L');
+    add(mirrorK10, 540, 'Post-twin spread: mirror10 K anchor');
+    add(mirrorL9, 420, 'Post-twin spread: mirror9 L anchor');
+  }
+
+  if(profile && profile.total >= 4){
+    (profile.positionCarryRate || []).forEach((rate, idx) => {
+      if(rate >= 0.50){
+        pushPriority(a[idx]);
+        add(a[idx], Math.round(460*rate), `Post-twin spread: carry jadwal posisi ${posName(idx)}`);
+      }
+    });
+  }
+
+  candidate.postTwinSpreadDigits = priority;
+}
+
+function forcePostTwinSpreadRescue(selected, latest, candidate){
+  const info = twinInfo(latest);
+  if(!info.twins.length || !candidate.postTwinSpreadDigits?.length) return;
+  const cooldownActive = !!candidate.twinCooldown?.active;
+  const priority = candidate.postTwinSpreadDigits
+    .filter(d => (candidate.postTwinSpreadScore?.[d] || 0) > 0)
+    .sort((a,b) => (candidate.postTwinSpreadScore[b] || 0) - (candidate.postTwinSpreadScore[a] || 0) || a-b);
+  if(!priority.length) return;
+
+  const minimum = cooldownActive ? 3 : 2;
+  // Yang wajib dilihat adalah inti spread tertinggi, bukan semua digit support.
+  // Pada kasus 0188, support 1/2/8 sudah ada, tetapi inti 6/5/3 belum lengkap.
+  const corePriority = priority.slice(0, minimum);
+  const present = corePriority.filter(d => selected.includes(d)).length;
+  let need = Math.max(0, minimum - present);
+  if(!need) return;
+
+  const protectedSet = new Set();
+  info.twins.forEach(t => { if(selected.includes(t)) protectedSet.add(Number(t)); });
+  const strongest = selected.slice().sort((a,b) => candidate.score[b]-candidate.score[a])[0];
+  if(strongest != null) protectedSet.add(Number(strongest));
+
+  const traceWidth = d => new Set((candidate.digitTrace?.[d] || []).map(x => x.family)).size;
+  const rescueOne = (d) => {
+    if(selected.includes(d)) return false;
+    const victim = selected.slice()
+      .filter(x => !protectedSet.has(Number(x)) && x !== d)
+      .sort((a,b) => {
+        const sa = candidate.score[a] + 7*traceWidth(a) - 0.72*(candidate.postTwinSpreadScore?.[a] || 0);
+        const sb = candidate.score[b] + 7*traceWidth(b) - 0.72*(candidate.postTwinSpreadScore?.[b] || 0);
+        return sa - sb || candidate.score[a] - candidate.score[b];
+      })[0];
+    if(victim == null) return false;
+    selected[selected.indexOf(victim)] = d;
+    protectedSet.add(Number(d));
+    return true;
+  };
+  for(const d of corePriority){
+    if(need <= 0) break;
+    if(rescueOne(d)) need -= 1;
+  }
+}
+
+function postTwinSpreadPairSeeds(latest, candidate, targetAnchor, kind){
+  const info = twinInfo(latest);
+  const a = latest?.digits || [];
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+  if(!info.twins.length || a.length < 4) return seeds;
+  const t = info.twins[0];
+  const split = mod10(t+t);
+  const cooldown = candidate.twinCooldown?.active;
+
+  if(targetAnchor && (targetAnchor.digits || []).length >= 4){
+    const ad = targetAnchor.digits;
+    const anchorBack = mod10(ad[2] + ad[3]);
+    const anchorMid = mod10(ad[1] + ad[2]);
+    const mirrorL10 = mod10(10 - ad[2]);
+    const mirrorK10 = mod10(10 - ad[1]);
+    if(kind === 'AK'){
+      add(`${split}${mirrorL10}`, 17400 + (cooldown ? 1600 : 0), 'AK post-twin: split + mirror10 L anchor');
+      add(`${anchorMid}${mirrorL10}`, 13200 + (cooldown ? 900 : 0), 'AK post-twin: anchor K+L + mirror10 L');
+      add(`${split}${anchorBack}`, 9800, 'AK post-twin: split + anchor L+E');
+      add(`${mirrorK10}${anchorMid}`, 6200, 'AK post-twin: mirror10 K + anchor middle');
+    }else{
+      add(`${anchorBack}${t}`, 17800 + (cooldown ? 1400 : 0), 'LE post-twin: anchor L+E + carry twin');
+      add(`${anchorBack}${split}`, 12600, 'LE post-twin: anchor L+E + split');
+      add(`${mirrorL10}${t}`, 9200, 'LE post-twin: mirror10 L + carry twin');
+      add(`${anchorMid}${t}`, 7600, 'LE post-twin: anchor K+L + carry twin');
+    }
+  }
+  return seeds;
+}
+
 function buildTransitionProfile(rows, targetDay){
   const latest = rows[0] || {};
   const chrono = rows.slice().reverse();
@@ -898,10 +1119,15 @@ function buildTwinLabScores(candidate, finalDigits, latest){
     const e = a[3];
     if(twins.length){
       const singles = a.filter(d => !twins.includes(d));
+      const cooldown = !!candidate.twinCooldown?.active;
+      const repeatRate = candidate.twinCycleProfile?.marketSameTwinRepeatRate || 0;
       twins.forEach(t => {
-        add(t, 260, 'carry digit kembar latest');
-        add(mod10(t+t), 300, 'pecah kembar t+t');
-        add(0, 180, 'pecah kembar t-t');
+        add(t, cooldown ? -620 : Math.round(180 + 360*repeatRate), cooldown ? 'cooldown: kembar sama jarang berulang' : 'carry digit kembar latest');
+        add(mod10(t+t), cooldown ? 620 : 300, 'pecah kembar t+t');
+        add(0, cooldown ? 80 : 180, 'pecah kembar t-t');
+      });
+      (candidate.postTwinSpreadDigits || []).slice(0,5).forEach((d,i) => {
+        add(d, Math.max(140, 540 - i*80), 'post-twin adaptive spread');
       });
       singles.forEach(s => {
         add(mod10(10-s), 220, 'cermin10 digit tunggal setelah kembar');
@@ -926,7 +1152,7 @@ function buildTwinLabScores(candidate, finalDigits, latest){
 function buildTwinLabAudit(twinAudit){
   if(!twinAudit || !twinAudit.ranked) return null;
   return {
-    title: `Twin Lab memilih ${twinAudit.chosen}${twinAudit.chosen}`,
+    title: `Twin Lab memilih ${twinAudit.chosen}${twinAudit.chosen}${twinAudit.cooldown?.active ? ' (cooldown aktif)' : ''}`,
     ranked: twinAudit.ranked.slice(0,5).map(x => `${x.digit}${x.digit}: ${Math.round(x.points)} poin (${x.reasons.slice(0,3).join(', ') || '-'})`)
   };
 }
@@ -1019,9 +1245,13 @@ function chooseTwinDigit(candidate, finalDigits, latest){
     const singles = a.filter(d => !twins.includes(d));
     const singleSum = singles.length >= 2 ? mod10(singles.reduce((s,d) => s+d, 0)) : null;
     const boundary = twins.find(t => t === 9 || t === 0);
-    const priority = uniqueDigits([boundary, singleSum, ...twins, ...twins.map(t => mod10(t+t)), 0].filter(x => x != null));
+    const cooldown = !!candidate.twinCooldown?.active;
+    const splitDigits = twins.map(t => mod10(t+t));
+    const priority = cooldown
+      ? uniqueDigits([singleSum, ...splitDigits, ...(candidate.postTwinSpreadDigits || []), boundary, 0, ...twins].filter(x => x != null))
+      : uniqueDigits([boundary, singleSum, ...twins, ...splitDigits, 0].filter(x => x != null));
     chosen = ranked
-      .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * 0.82))
+      .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * (cooldown ? 0.66 : 0.82)))
       .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
   }else{
     const seed = mod10(a[2]+a[3]);
@@ -1031,7 +1261,7 @@ function chooseTwinDigit(candidate, finalDigits, latest){
       .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
   }
   if(chosen == null) chosen = ranked.find(x => allowed.includes(x.digit))?.digit ?? ranked[0]?.digit ?? 0;
-  candidate.twinAudit = {chosen, ranked};
+  candidate.twinAudit = {chosen, ranked, cooldown:candidate.twinCooldown};
   return chosen;
 }
 
@@ -1076,6 +1306,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(orderedPairSeeds(latest, formulas, kind), 50, 'latest');
   if(targetAnchor) pushSeeds(orderedPairSeeds(targetAnchor, formulas, kind), 42, 'anchor hari target');
   pushSeeds(transitionCarryPairSeeds(latest, candidate, kind), 0, 'transition carry lock');
+  pushSeeds(postTwinSpreadPairSeeds(latest, candidate, targetAnchor, kind), 0, 'post-twin spread lock');
 
   // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
   if(targetAnchor && (targetAnchor.digits || []).length >= 4){
@@ -1476,6 +1707,7 @@ function renderResult(r){
   const anchorHtml = r.audit.targetAnchor ? `<div><b>Jangkar hari target</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchor.title)}</li><li>Carry: ${escapeHtml(r.audit.targetAnchor.carry)}</li><li>Cermin: ${escapeHtml(r.audit.targetAnchor.mirror)}</li><li>Gerbang: ${escapeHtml(r.audit.targetAnchor.gate)}</li><li>Root: ${escapeHtml(r.audit.targetAnchor.root)}</li></ul></div>` : '';
   const transitionHtml = r.audit.transitionProfile ? `<div><b>Schedule-aware carry</b><ul class="process-list small"><li>${escapeHtml(r.audit.transitionProfile.title)}</li><li>Total sampel: ${escapeHtml(r.audit.transitionProfile.total)}</li><li>${escapeHtml(r.audit.transitionProfile.latestCarry)}</li>${r.audit.transitionProfile.samples.slice(0,5).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const twinLabHtml = r.audit.twinLab ? `<div><b>Twin Lab</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinLab.title)}</li>${r.audit.twinLab.ranked.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
+  const twinCycleHtml = r.audit.twinCycle ? `<div><b>Twin cycle history</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinCycle.title)}</li><li>Latest twin: ${escapeHtml(r.audit.twinCycle.latestTwins)}</li><li>Repeat sama: ${escapeHtml(r.audit.twinCycle.sameRepeat)}</li><li>Twin berikutnya: ${escapeHtml(r.audit.twinCycle.nextTwin)}</li><li>Digit twin historis: ${escapeHtml(r.audit.twinCycle.nextTwinDigits)}</li><li>Status: ${escapeHtml(r.audit.twinCycle.cooldown)}</li></ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
     <div class="audit-columns">
       <div><b>Transisi harian terbaru</b><ul class="process-list small">${r.audit.process.daily.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
@@ -1492,7 +1724,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V5.0 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, dan twin lab root lock.</p>
+      <p class="tagline">Engine V5.1 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, dan post-twin adaptive spread.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
