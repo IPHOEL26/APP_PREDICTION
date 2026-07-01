@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V4.8 • AKLE Position Lock';
+const APP_VERSION = 'IPHOEL Formula Engine V4.9 • Schedule-Aware Carry Lock';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -131,24 +131,29 @@ function buildFormulaPrediction(rows){
   const chrono = rows.slice().reverse();
   const formulas = buildFormulaLibrary();
   const targetDay = inferTargetDay(rows);
+  const transitionProfile = buildTransitionProfile(rows, targetDay);
   const learned = learnFormulaWeights(chrono, formulas);
   const learnedDay = learnDayFormulaWeights(chrono, formulas, latest.day);
   const learnedWeekLatest = learnWeekFormulaWeights(chrono, formulas, latest.day);
   const learnedWeekTarget = learnWeekFormulaWeights(chrono, formulas, targetDay);
   const targetAnchor = findTargetDayAnchor(rows, targetDay);
   const candidate = scoreCurrent(latest, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget);
+  candidate.transitionProfile = transitionProfile;
   applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
+  applyTransitionCarryProfile(candidate, latest, transitionProfile);
   const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const finalDigits = chooseFormulaDigits(candidate, latest);
   forceAKLEMiddleRescue(finalDigits, akle, candidate);
   forceTwinAnchorSingleRescue(finalDigits, latest, candidate);
   forceTargetAnchorCarryRescue(finalDigits, latest, candidate);
   forceTwinSingleMirrorExpandedRescue(finalDigits, latest, candidate);
+  forceTransitionCarryRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.targetAnchor = buildTargetAnchorAudit(targetAnchor, formulas);
+  audit.transitionProfile = buildTransitionProfileAudit(transitionProfile, latest);
   audit.process = buildProcessCards(rows, formulas);
-  return {rows, latest, targetDay, targetAnchor, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
+  return {rows, latest, targetDay, targetAnchor, transitionProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
 }
 
 function buildFormulaLibrary(){
@@ -692,6 +697,104 @@ function forceTwinSingleMirrorExpandedRescue(selected, latest, candidate){
   replaceWeakestForRescue(selected, rescue, candidate, protectedSet);
 }
 
+
+function buildTransitionProfile(rows, targetDay){
+  const latest = rows[0] || {};
+  const chrono = rows.slice().reverse();
+  const profile = {
+    fromDay: latest.day || '-',
+    toDay: targetDay || '-',
+    total: 0,
+    positionCarry: [0,0,0,0],
+    positionSame: [0,0,0,0],
+    positionCarryRate: [0,0,0,0],
+    positionSameRate: [0,0,0,0],
+    samples: []
+  };
+  if(!profile.fromDay || profile.fromDay === '-' || !profile.toDay || profile.toDay === '-') return profile;
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = chrono[i];
+    const next = chrono[i+1];
+    if(prev.day !== profile.fromDay || next.day !== profile.toDay) continue;
+    profile.total += 1;
+    const nextSet = uniqueDigits(next.digits);
+    const carried = [];
+    for(let p=0;p<4;p++){
+      const d = prev.digits[p];
+      if(nextSet.includes(d)){
+        profile.positionCarry[p] += 1;
+        carried.push(`${posName(p)}=${d}`);
+      }
+      if(prev.digits[p] === next.digits[p]) profile.positionSame[p] += 1;
+    }
+    if(profile.samples.length < 8){
+      profile.samples.push(`${prev.day} ${prev.digits.join('')} → ${next.day} ${next.digits.join('')} | carry ${carried.join(', ') || '-'}`);
+    }
+  }
+  if(profile.total){
+    profile.positionCarryRate = profile.positionCarry.map(x => x / profile.total);
+    profile.positionSameRate = profile.positionSame.map(x => x / profile.total);
+  }
+  return profile;
+}
+
+function applyTransitionCarryProfile(candidate, latest, profile){
+  candidate.transitionCarryScore = Array(10).fill(0);
+  if(!profile || profile.total < 4 || !(latest?.digits || []).length) return;
+  for(let p=0;p<4;p++){
+    const rate = profile.positionCarryRate[p] || 0;
+    const same = profile.positionSameRate[p] || 0;
+    // Kunci ini khusus untuk transisi jadwal historis, misalnya Senin→Rabu.
+    // Posisi yang sering hidup kembali di draw berikutnya diberi bobot supaya tidak terbuang oleh rescue lain.
+    if(rate < 0.30) continue;
+    const d = latest.digits[p];
+    const amount = Math.round(820*rate + 260*same + (p === 3 ? 90 : 0));
+    candidate.transitionCarryScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, `Transition carry ${profile.fromDay}→${profile.toDay} posisi ${posName(p)}`, 'transitionCarry');
+  }
+}
+
+function forceTransitionCarryRescue(selected, latest, candidate){
+  const profile = candidate.transitionProfile;
+  if(!profile || profile.total < 4 || !(latest?.digits || []).length) return;
+  const required = [];
+  for(let p=0;p<4;p++){
+    const rate = profile.positionCarryRate[p] || 0;
+    // Ambang dibuat adaptif: K dan E biasanya lebih penting sebagai pintu tengah/ekor.
+    const threshold = (p === 1 || p === 3) ? 0.40 : 0.34;
+    if(rate >= threshold){
+      required.push({p, d:latest.digits[p], rate, same:profile.positionSameRate[p] || 0});
+    }
+  }
+  if(!required.length) return;
+  required.sort((a,b) => b.rate - a.rate || b.same - a.same || b.p - a.p);
+
+  const protectedSet = new Set();
+  // Jangan buang dua digit terkuat umum, digit anchor kuat, dan digit yang sudah menjadi carry transisi.
+  DIGITS.slice().sort((a,b) => candidate.score[b]-candidate.score[a]).slice(0,2).forEach(d => { if(selected.includes(d)) protectedSet.add(Number(d)); });
+  uniqueDigits(candidate.targetAnchor?.digits || []).forEach(d => { if(selected.includes(d)) protectedSet.add(Number(d)); });
+  required.forEach(x => { if(selected.includes(x.d)) protectedSet.add(Number(x.d)); });
+
+  required.slice(0,3).forEach(x => {
+    if(selected.includes(x.d)) return;
+    replaceWeakestForRescue(selected, x.d, candidate, protectedSet);
+    protectedSet.add(Number(x.d));
+  });
+}
+
+function buildTransitionProfileAudit(profile, latest){
+  if(!profile || !profile.total) return null;
+  const pos = ['A','K','L','E'];
+  return {
+    title:`Pola transisi ${profile.fromDay} → ${profile.toDay}`,
+    total: profile.total,
+    latestCarry: pos.map((name,i) => `${name}=${latest.digits[i]} (${profile.positionCarry[i]}/${profile.total})`).join(' | '),
+    samples: profile.samples || []
+  };
+}
+
+function posName(index){return ['A','K','L','E'][index] || String(index);}
+
 function formulaMustHave(latest){
   const a = latest.digits;
   const out = [];
@@ -846,6 +949,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   };
   pushSeeds(orderedPairSeeds(latest, formulas, kind), 50, 'latest');
   if(targetAnchor) pushSeeds(orderedPairSeeds(targetAnchor, formulas, kind), 42, 'anchor hari target');
+  pushSeeds(transitionCarryPairSeeds(latest, candidate, kind), 0, 'transition carry lock');
 
   // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
   if(targetAnchor && (targetAnchor.digits || []).length >= 4){
@@ -936,7 +1040,68 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
 
   const ranked = Object.values(scored)
     .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
-  return applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate).slice(0,5);
+  const positionLocked = applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate);
+  return applyAKLETransitionLock(positionLocked, kind, latest, candidate).slice(0,5);
+}
+
+
+function transitionCarryPairSeeds(latest, candidate, kind){
+  const profile = candidate.transitionProfile;
+  const a = latest?.digits || [];
+  if(!profile || profile.total < 4 || a.length < 4) return [];
+  const rate = idx => profile.positionCarryRate[idx] || 0;
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+
+  if(kind === 'AK'){
+    // Jika K latest sering carry pada transisi jadwal ini, A dicari dari pembuka rumus terkuat:
+    // mirror A, jumlah K+L, dan root. Ini menutup kasus 3428 → 6428: K=4 dijaga, A=6 dibuka oleh 9-3 dan 4+2.
+    if(rate(1) >= 0.34){
+      const k = a[1];
+      add(`${mod10(9-a[0])}${k}`, 12600 + Math.round(1200*rate(1)), 'AK transition: mirror A + carry K');
+      add(`${mod10(a[1]+a[2])}${k}`, 12400 + Math.round(1200*rate(1)), 'AK transition: K+L + carry K');
+      add(`${digitalRoot(sumDigits(latest))}${k}`, 5200 + Math.round(700*rate(1)), 'AK transition: root + carry K');
+    }
+    if(rate(0) >= 0.34 && rate(1) >= 0.34){
+      add(`${a[0]}${a[1]}`, 7600 + Math.round(900*(rate(0)+rate(1))), 'AK transition: carry A-K');
+    }
+  }else{
+    // Jika L dan E latest punya riwayat carry, pair LE asli wajib naik ke kandidat utama.
+    // Ini menutup kasus 3428 → 6428: L=2 dan E=8 tidak boleh kalah oleh anchor/pair generik.
+    if(rate(2) >= 0.25 && rate(3) >= 0.34){
+      add(`${a[2]}${a[3]}`, 13800 + Math.round(1200*(rate(2)+rate(3))), 'LE transition: carry L-E');
+    }
+    if(rate(3) >= 0.40){
+      add(`${mod10(a[1]+a[2])}${a[3]}`, 8200 + Math.round(900*rate(3)), 'LE transition: K+L + carry E');
+      add(`${mod10(10-a[0])}${a[3]}`, 6200 + Math.round(700*rate(3)), 'LE transition: mirror10 A + carry E');
+    }
+  }
+  return seeds;
+}
+
+function applyAKLETransitionLock(ranked, kind, latest, candidate){
+  const profile = candidate.transitionProfile;
+  const a = latest?.digits || [];
+  if(!profile || profile.total < 4 || a.length < 4) return ranked;
+  const rate = idx => profile.positionCarryRate[idx] || 0;
+  const map = {};
+  ranked.forEach(x => map[x.pair] = {...x, notes:[...(x.notes || [])]});
+  const ensure = (pair, points, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!map[pair]) map[pair] = {pair, points:0, notes:[]};
+    map[pair].points = Math.max(map[pair].points, points);
+    if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
+  };
+
+  if(kind === 'AK' && rate(1) >= 0.34){
+    const k = a[1];
+    ensure(`${mod10(9-a[0])}${k}`, 15100 + 700*rate(1), 'AK transition lock');
+    ensure(`${mod10(a[1]+a[2])}${k}`, 14900 + 700*rate(1), 'AK transition lock');
+  }
+  if(kind === 'LE' && rate(2) >= 0.25 && rate(3) >= 0.34){
+    ensure(`${a[2]}${a[3]}`, 15600 + 700*(rate(2)+rate(3)), 'LE transition lock');
+  }
+  return Object.values(map).sort((x,y) => y.points - x.points || x.pair.localeCompare(y.pair));
 }
 
 function applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate){
@@ -1125,6 +1290,18 @@ function buildProcessCards(rows, formulas){
 function inferTargetDay(rows){
   const latest = rows[0]?.day;
   if(!latest) return '-';
+  const chrono = rows.slice().reverse();
+  const nextDayScore = {};
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = chrono[i];
+    const next = chrono[i+1];
+    if(prev.day !== latest || !next.day) continue;
+    // Bobot lebih besar untuk transisi yang lebih dekat ke data terbaru.
+    const recency = i + 1;
+    nextDayScore[next.day] = (nextDayScore[next.day] || 0) + 10 + recency;
+  }
+  const learned = Object.entries(nextDayScore).sort((a,b) => b[1]-a[1] || DAYS.indexOf(a[0])-DAYS.indexOf(b[0]))[0];
+  if(learned) return learned[0];
   const idx = DAYS.indexOf(latest);
   return idx >= 0 ? DAYS[(idx + 1) % 7] : '-';
 }
@@ -1150,11 +1327,13 @@ function renderResult(r){
   const tableHtml = renderDataTable(r.rows.slice(0,18));
 
   const anchorHtml = r.audit.targetAnchor ? `<div><b>Jangkar hari target</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchor.title)}</li><li>Carry: ${escapeHtml(r.audit.targetAnchor.carry)}</li><li>Cermin: ${escapeHtml(r.audit.targetAnchor.mirror)}</li><li>Gerbang: ${escapeHtml(r.audit.targetAnchor.gate)}</li><li>Root: ${escapeHtml(r.audit.targetAnchor.root)}</li></ul></div>` : '';
+  const transitionHtml = r.audit.transitionProfile ? `<div><b>Schedule-aware carry</b><ul class="process-list small"><li>${escapeHtml(r.audit.transitionProfile.title)}</li><li>Total sampel: ${escapeHtml(r.audit.transitionProfile.total)}</li><li>${escapeHtml(r.audit.transitionProfile.latestCarry)}</li>${r.audit.transitionProfile.samples.slice(0,5).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
     <div class="audit-columns">
       <div><b>Transisi harian terbaru</b><ul class="process-list small">${r.audit.process.daily.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
       <div><b>Hari sama per pekan</b><ul class="process-list small">${r.audit.process.weeklyLatest.concat(r.audit.process.weeklyTarget).slice(0,7).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Belum cukup pasangan pekanan.</li>'}</ul></div>
       ${anchorHtml}
+      ${transitionHtml}
       <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
     </div>
   </div>` : '';
@@ -1164,7 +1343,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V4.7 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, dan parser date-first.</p>
+      <p class="tagline">Engine V4.9 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, dan transition carry lock.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
