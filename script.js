@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V5.7 • World Formula Replay + Twin/AKLE Diagnostics';
+const APP_VERSION = 'IPHOEL Formula Engine V5.8 • Target Edge Bridge + AKLE Rescue';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -153,6 +153,7 @@ function buildFormulaPrediction(inputRows){
   applyBoundaryTailMirrorCluster(candidate, latest, targetAnchor, transitionProfile);
   applyComplementCarryBridge(candidate, latest, targetAnchor, transitionProfile);
   applyCenterBridgeFormula(candidate, latest, targetAnchor, marketProfile);
+  applyTargetEdgeBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   const replayProfile = buildWorldFormulaReplayProfile(rows, targetDay);
   candidate.replayProfile = replayProfile;
   applyWorldFormulaReplay(candidate, latest, replayProfile);
@@ -171,9 +172,11 @@ function buildFormulaPrediction(inputRows){
   forceComplementCarryBridgeRescue(finalDigits, latest, candidate);
   forceCenterBridgeRescue(finalDigits, latest, candidate);
   forceWorldFormulaReplayRescue(finalDigits, latest, candidate);
+  forceTargetEdgeBridgeRescue(finalDigits, latest, candidate);
   forceMarketCarryBalanceRescue(finalDigits, latest, candidate);
   forceCenterBridgeRescue(finalDigits, latest, candidate);
   forceWorldFormulaReplayRescue(finalDigits, latest, candidate);
+  forceTargetEdgeBridgeRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.twinLab = buildTwinLabAudit(candidate.twinAudit);
@@ -183,6 +186,7 @@ function buildFormulaPrediction(inputRows){
   audit.marketProfile = buildMarketProfileAudit(marketProfile, latest);
   audit.complementBridge = buildComplementBridgeAudit(candidate.complementBridgeAudit);
   audit.centerBridge = buildCenterBridgeAudit(candidate.centerBridgeAudit);
+  audit.targetEdgeBridge = buildTargetEdgeBridgeAudit(candidate.targetEdgeBridgeAudit);
   audit.worldReplay = buildWorldFormulaReplayAudit(replayProfile, candidate);
   audit.process = buildProcessCards(rows, formulas);
   return {rows, allRows, latest, targetDay, targetAnchor, transitionProfile, twinCycleProfile, marketProfile, replayProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
@@ -2063,6 +2067,135 @@ function buildCenterBridgeAudit(audit){
 }
 
 
+// V5.8: Target Edge Bridge
+// Blind spot sebelumnya: saat target hari berikutnya punya anchor kuat, engine hanya membaca anchor sebagai bobot digit,
+// bukan sebagai jembatan posisi. Untuk pola Sabtu→Senin, kombinasi edge anchor A/E + edge latest A/E
+// dapat membuka quartet target tanpa mengandalkan frekuensi angka: anchor A | latest A | latest E | anchor E.
+function targetEdgeBridgeContext(latest, targetAnchor, transitionProfile, marketProfile){
+  const ld = latest?.digits || [];
+  const ad = targetAnchor?.digits || [];
+  if(ld.length < 4 || ad.length < 4) return null;
+  const latestTwin = twinInfo(latest).twins.length > 0;
+  const anchorTwin = twinInfo(targetAnchor).twins.length > 0;
+  const transitionSamples = Number(transitionProfile?.total || marketProfile?.total || 0);
+  if(transitionSamples < 4) return null;
+  const hardCap = Number(marketProfile?.targetCarryHardCap || 4);
+  const lowCarry = Number(marketProfile?.targetCarrySamples || marketProfile?.total || 0) >= 5 && hardCap <= 2;
+  const edges = uniqueDigits([ad[0], ld[0], ld[3], ad[3]]);
+  if(edges.length < 3) return null;
+  return {ld, ad, latestTwin, anchorTwin, lowCarry, transitionSamples, hardCap, edges};
+}
+
+function applyTargetEdgeBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile){
+  candidate.targetEdgeBridgeScore = Array(10).fill(0);
+  candidate.targetEdgeBridgeDigits = [];
+  candidate.targetEdgeBridgeAudit = null;
+  const ctx = targetEdgeBridgeContext(latest, targetAnchor, transitionProfile, marketProfile);
+  if(!ctx) return;
+  const {ld, ad, lowCarry, transitionSamples} = ctx;
+  const add = (d, amount, note) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.targetEdgeBridgeScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, note, 'targetEdgeBridge');
+  };
+  const base = lowCarry ? 2450 : 1480;
+  // Edge luar diberi bobot paling besar karena ia menjaga digit yang sering kalah oleh center/world replay.
+  add(ad[0], base + 520, 'Target edge bridge: anchor A sebagai pembuka');
+  add(ld[0], base + 430, 'Target edge bridge: latest A sebagai carry depan');
+  add(ld[3], base + 430, 'Target edge bridge: latest E sebagai carry belakang');
+  add(ad[3], base + 520, 'Target edge bridge: anchor E sebagai penutup');
+  // Dukungan tengah tetap ada, tetapi tidak boleh mendominasi edge.
+  add(ad[1], Math.round(base*0.32), 'Target edge bridge: anchor K support');
+  add(ad[2], Math.round(base*0.28), 'Target edge bridge: anchor L support');
+  add(mod10(ad[0] + ld[0]), Math.round(base*0.42), 'Target edge bridge: A anchor + A latest');
+  add(mod10(ld[3] + ad[3]), Math.round(base*0.42), 'Target edge bridge: E latest + E anchor');
+
+  candidate.targetEdgeBridgeDigits = uniqueDigits([ad[0], ld[0], ld[3], ad[3]])
+    .sort((x,y) => (candidate.targetEdgeBridgeScore[y] || 0) - (candidate.targetEdgeBridgeScore[x] || 0));
+  candidate.targetEdgeBridgeAudit = {
+    title:`Target edge bridge aktif: anchor ${targetAnchor.day || '-'} ${ad.join('')} × latest ${latest.day || '-'} ${ld.join('')}`,
+    digits:candidate.targetEdgeBridgeDigits.map(d => `${d}:${Math.round(candidate.targetEdgeBridgeScore[d] || 0)}`).join(' | '),
+    ak:`${ad[0]}${ld[0]}`,
+    le:`${ld[3]}${ad[3]}`,
+    transitionSamples
+  };
+}
+
+function forceTargetEdgeBridgeRescue(selected, latest, candidate){
+  if(!candidate.targetEdgeBridgeDigits?.length) return;
+  const score = candidate.targetEdgeBridgeScore || Array(10).fill(0);
+  const required = candidate.targetEdgeBridgeDigits
+    .filter(d => (score[d] || 0) >= 1200)
+    .sort((a,b) => (score[b] || 0) - (score[a] || 0));
+  if(required.length < 3) return;
+  // Jika bridge aktif, minimal empat digit edge harus terlihat dalam 6D saat ruang masih 6 digit.
+  const minimum = Math.min(4, required.length);
+  let present = required.filter(d => selected.includes(d)).length;
+  if(present >= minimum) return;
+
+  const protectedSet = new Set(required.filter(d => selected.includes(d)).map(Number));
+  // Lindungi satu skor umum paling tinggi agar output tidak berubah menjadi murni anchor/carry saja.
+  const strongest = selected.slice().sort((a,b) => (candidate.score[b] || 0) - (candidate.score[a] || 0))[0];
+  if(strongest != null) protectedSet.add(Number(strongest));
+  const traceWidth = d => new Set((candidate.digitTrace?.[d] || []).map(x => x.family)).size;
+  const victimScore = d =>
+    (candidate.score?.[d] || 0) + 10*traceWidth(d) - 0.90*(score[d] || 0) + 0.12*((candidate.worldReplayScore || [])[d] || 0);
+  for(const d of required){
+    if(present >= minimum) break;
+    if(selected.includes(d)) continue;
+    const victim = selected.slice()
+      .filter(x => !protectedSet.has(Number(x)))
+      .sort((a,b) => victimScore(a) - victimScore(b) || (candidate.score[a] || 0) - (candidate.score[b] || 0))[0];
+    if(victim == null) continue;
+    selected[selected.indexOf(victim)] = d;
+    protectedSet.add(Number(d));
+    present += 1;
+  }
+}
+
+function targetEdgeBridgePairSeeds(latest, targetAnchor, candidate, kind){
+  const ctx = targetEdgeBridgeContext(latest, targetAnchor, candidate?.transitionProfile, candidate?.marketProfile);
+  if(!ctx) return [];
+  const {ld, ad, lowCarry} = ctx;
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+  const base = lowCarry ? 26800 : 18800;
+  if(kind === 'AK'){
+    add(`${ad[0]}${ld[0]}`, base + 7200, 'AK target-edge: anchor A + latest A');
+    add(`${ld[0]}${ad[0]}`, Math.round(base*0.72), 'AK target-edge balik: latest A + anchor A');
+    add(`${ad[0]}${ld[3]}`, Math.round(base*0.58), 'AK target-edge: anchor A + latest E');
+    add(`${ad[3]}${ld[0]}`, Math.round(base*0.52), 'AK target-edge: anchor E + latest A');
+  }else{
+    add(`${ld[3]}${ad[3]}`, base + 7200, 'LE target-edge: latest E + anchor E');
+    add(`${ad[3]}${ld[3]}`, Math.round(base*0.72), 'LE target-edge balik: anchor E + latest E');
+    add(`${ld[3]}${ad[0]}`, Math.round(base*0.58), 'LE target-edge: latest E + anchor A');
+    add(`${ld[0]}${ad[3]}`, Math.round(base*0.52), 'LE target-edge: latest A + anchor E');
+  }
+  return seeds;
+}
+
+function applyTargetEdgeBridgePairLock(ranked, kind, latest, targetAnchor, candidate){
+  const seeds = targetEdgeBridgePairSeeds(latest, targetAnchor, candidate, kind).slice(0,3);
+  if(!seeds.length) return ranked;
+  const map = {};
+  ranked.forEach(x => map[x.pair] = {...x, notes:[...(x.notes || [])]});
+  const ensure = (pair, points, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!map[pair]) map[pair] = {pair, points:0, notes:[]};
+    map[pair].points = Math.max(map[pair].points, points);
+    if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
+  };
+  seeds.forEach((s,i) => ensure(s.pair, 56000 + (s.bonus || 0) - i*1400, 'target edge bridge lock'));
+  return Object.values(map).sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
+}
+
+function buildTargetEdgeBridgeAudit(audit){
+  if(!audit) return null;
+  return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le};
+}
+
+
 function boundaryTailMirrorDigits(latest){
   const a = latest?.digits || [];
   if(a.length < 4) return [];
@@ -2444,6 +2577,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(akleFlowPairSeeds(latest, candidate, kind), 0, 'AKLE flow gate');
   pushSeeds(diagnosticAKLEPairSeeds(latest, candidate, kind), 0, 'diagnostic AKLE gate');
   pushSeeds(centerBridgePairSeeds(latest, candidate, kind), 0, 'center bridge formula');
+  pushSeeds(targetEdgeBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target edge bridge');
   pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
   // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
@@ -2536,7 +2670,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   const ranked = Object.values(scored)
     .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
   const positionLocked = applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate);
-  return applyDiagnosticAKLEPairLock(applyWorldReplayPairLock(applyCenterBridgePairLock(applyAKLETransitionLock(positionLocked, kind, latest, candidate), kind, latest, candidate), kind, latest, candidate), kind, latest, candidate).slice(0,5);
+  return applyDiagnosticAKLEPairLock(applyTargetEdgeBridgePairLock(applyWorldReplayPairLock(applyCenterBridgePairLock(applyAKLETransitionLock(positionLocked, kind, latest, candidate), kind, latest, candidate), kind, latest, candidate), kind, latest, targetAnchor, candidate), kind, latest, candidate).slice(0,5);
 }
 
 
@@ -2900,6 +3034,7 @@ function renderResult(r){
   const twinCycleHtml = r.audit.twinCycle ? `<div><b>Twin cycle history</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinCycle.title)}</li><li>Latest twin: ${escapeHtml(r.audit.twinCycle.latestTwins)}</li><li>Repeat sama: ${escapeHtml(r.audit.twinCycle.sameRepeat)}</li><li>Twin berikutnya: ${escapeHtml(r.audit.twinCycle.nextTwin)}</li><li>Digit twin historis: ${escapeHtml(r.audit.twinCycle.nextTwinDigits)}</li><li>Status: ${escapeHtml(r.audit.twinCycle.cooldown)}</li></ul></div>` : '';
   const complementHtml = r.audit.complementBridge ? `<div><b>Complement bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.complementBridge.title)}</li><li>${escapeHtml(r.audit.complementBridge.digits)}</li></ul></div>` : '';
   const centerBridgeHtml = r.audit.centerBridge ? `<div><b>Center bridge formula</b><ul class="process-list small"><li>${escapeHtml(r.audit.centerBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.centerBridge.digits)}</li><li>Twin: ${escapeHtml(r.audit.centerBridge.twin)}</li></ul></div>` : '';
+  const targetEdgeBridgeHtml = r.audit.targetEdgeBridge ? `<div><b>Target edge bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetEdgeBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetEdgeBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetEdgeBridge.ak)}</li><li>LE: ${escapeHtml(r.audit.targetEdgeBridge.le)}</li></ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
@@ -2912,6 +3047,7 @@ function renderResult(r){
       ${twinCycleHtml}
       ${complementHtml}
       ${centerBridgeHtml}
+      ${targetEdgeBridgeHtml}
       ${worldReplayHtml}
       ${marketHtml}
       <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
@@ -2923,7 +3059,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V5.7 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, post-twin adaptive spread, complement zero bridge, AK K+A lock, LE zero+A lock, center bridge K+L/K+E, market carry brake, dan center-bridge twin audit.</p>
+      <p class="tagline">Engine V5.8 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, post-twin adaptive spread, complement zero bridge, AK K+A lock, LE zero+A lock, center bridge K+L/K+E, market carry brake, target-edge bridge, AKLE edge rescue, dan center-bridge twin audit.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
