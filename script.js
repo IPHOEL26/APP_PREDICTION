@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V5.6 • Twin Gate Balancer + AKLE Flow';
+const APP_VERSION = 'IPHOEL Formula Engine V5.7 • World Formula Replay + Twin/AKLE Diagnostics';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -153,6 +153,9 @@ function buildFormulaPrediction(inputRows){
   applyBoundaryTailMirrorCluster(candidate, latest, targetAnchor, transitionProfile);
   applyComplementCarryBridge(candidate, latest, targetAnchor, transitionProfile);
   applyCenterBridgeFormula(candidate, latest, targetAnchor, marketProfile);
+  const replayProfile = buildWorldFormulaReplayProfile(rows, targetDay);
+  candidate.replayProfile = replayProfile;
+  applyWorldFormulaReplay(candidate, latest, replayProfile);
   applyPostTwinAdaptiveSpread(candidate, latest, targetAnchor, transitionProfile, twinCycleProfile);
   const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const finalDigits = chooseFormulaDigits(candidate, latest);
@@ -167,8 +170,10 @@ function buildFormulaPrediction(inputRows){
   forcePostTwinSpreadRescue(finalDigits, latest, candidate);
   forceComplementCarryBridgeRescue(finalDigits, latest, candidate);
   forceCenterBridgeRescue(finalDigits, latest, candidate);
+  forceWorldFormulaReplayRescue(finalDigits, latest, candidate);
   forceMarketCarryBalanceRescue(finalDigits, latest, candidate);
   forceCenterBridgeRescue(finalDigits, latest, candidate);
+  forceWorldFormulaReplayRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.twinLab = buildTwinLabAudit(candidate.twinAudit);
@@ -178,8 +183,9 @@ function buildFormulaPrediction(inputRows){
   audit.marketProfile = buildMarketProfileAudit(marketProfile, latest);
   audit.complementBridge = buildComplementBridgeAudit(candidate.complementBridgeAudit);
   audit.centerBridge = buildCenterBridgeAudit(candidate.centerBridgeAudit);
+  audit.worldReplay = buildWorldFormulaReplayAudit(replayProfile, candidate);
   audit.process = buildProcessCards(rows, formulas);
-  return {rows, allRows, latest, targetDay, targetAnchor, transitionProfile, twinCycleProfile, marketProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
+  return {rows, allRows, latest, targetDay, targetAnchor, transitionProfile, twinCycleProfile, marketProfile, replayProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
 }
 
 
@@ -593,6 +599,419 @@ function buildMarketProfileAudit(profile, latest){
     ak,
     le,
     samples:(profile.transitionSamples || []).slice(0,4)
+  };
+}
+
+
+
+// V5.7: AKLE diagnostic gates
+// Kumpulan gerbang ini tetap operasi matematika, bukan hardcode pasaran. Tujuannya memastikan
+// pasangan AK/LE tidak hanya didominasi template lama ketika rumus current membuka jalur baru.
+function diagnosticAKLEPairSeeds(latest, candidate, kind){
+  const a = latest?.digits || [];
+  if(a.length < 4) return [];
+  const [A,K,L,E] = a;
+  const root = digitalRoot(sumDigits(latest));
+  const total = mod10(sumDigits(latest));
+  const m9 = d => mod10(9-d), m10 = d => mod10(10-d);
+  const sum = (x,y) => mod10(x+y);
+  const diff = (x,y) => Math.abs(x-y)%10;
+  const triple = (...idx) => mod10(idx.reduce((s,i) => s + a[i], 0));
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+  const replay = candidate?.replayProfile?.digitScore || Array(10).fill(0);
+  const support = (x,y) => Math.round(0.018*((replay[x]||0)+(replay[y]||0)) + 0.025*((candidate?.score?.[x]||0)+(candidate?.score?.[y]||0)));
+  if(kind === 'AK'){
+    const candidates = [
+      [`${mod10(root+6)}${m10(A)}`, 9200, 'AK diag: root+6 + mirror10 A'],
+      [`${m10(K)}${triple(0,1,3)}`, 9000, 'AK diag: mirror10 K + A+K+E'],
+      [`${E}${m10(E)}`, 8800, 'AK diag: carry E + mirror10 E'],
+      [`${K}${diff(K,A)}`, 9000, 'AK diag: carry K + diff K-A'],
+      [`${mod10(root+6)}${m9(K)}`, 9100, 'AK diag: root+6 + mirror9 K'],
+      [`${diff(K,L)}${K}`, 8950, 'AK diag: diff K-L + carry K'],
+      [`${K}${mod10(E+2)}`, 8800, 'AK diag: carry K + E+2'],
+      [`${m9(A)}${K}`, 9200, 'AK diag: mirror9 A + carry K'],
+      [`${sum(K,L)}${K}`, 7600, 'AK diag: K+L + carry K'],
+      [`${sum(A,E)}${A}`, 7600, 'AK diag: A+E + carry A']
+    ];
+    candidates.forEach(([pair,base,label]) => add(pair, base + support(Number(pair[0]), Number(pair[1])), label));
+  }else{
+    const twinZero = twinInfo(latest).twins.length ? 0 : diff(K,L);
+    const candidates = [
+      [`${m9(total)}${A}`, 9000, 'LE diag: mirror9 total + carry A'],
+      [`${m9(total)}${L}`, 8800, 'LE diag: mirror9 total + carry L'],
+      [`${mod10(root+4)}${mod10(root+4)}`, 9200, 'LE diag: root+4 twin'],
+      [`${E}${A}`, 9000, 'LE diag: carry E + carry A'],
+      [`${diff(K,A)}${E}`, 9200, 'LE diag: diff K-A + carry E'],
+      [`${L}${E}`, 9300, 'LE diag: carry L-E'],
+      [`${sum(K,L)}0`, 9000, 'LE diag: K+L + zero/twin split'],
+      [`${K}${L}`, 9100, 'LE diag: carry K-L'],
+      [`${K}${E}`, 8800, 'LE diag: carry K-E'],
+      [`${sum(K,L)}${sum(K,E)}`, 8200, 'LE diag: K+L + K+E'],
+      [`${diff(K,L)}${twinZero}`, 7600, 'LE diag: diff center + twin split']
+    ];
+    candidates.forEach(([pair,base,label]) => add(pair, base + support(Number(pair[0]), Number(pair[1])), label));
+  }
+  return mergePairSeeds(seeds).sort((a,b) => b.bonus - a.bonus || a.pair.localeCompare(b.pair)).slice(0,12);
+}
+
+function applyDiagnosticAKLEPairLock(ranked, kind, latest, candidate){
+  const seeds = diagnosticAKLEPairSeeds(latest, candidate, kind).slice(0,7);
+  if(!seeds.length) return ranked;
+  const map = {};
+  ranked.forEach(x => map[x.pair] = {...x, notes:[...(x.notes || [])]});
+  const ensure = (pair, points, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!map[pair]) map[pair] = {pair, points:0, notes:[]};
+    map[pair].points = Math.max(map[pair].points, points);
+    if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
+  };
+  seeds.forEach((s,i) => ensure(s.pair, 15600 + (s.bonus || 0) - i*650, s.label || 'diagnostic AKLE'));
+  return Object.values(map).sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
+}
+
+function twinDiagnosticScores(latest, candidate){
+  const a = latest?.digits || [];
+  const score = Array(10).fill(0);
+  if(a.length < 4) return score;
+  const [A,K,L,E] = a;
+  const root = digitalRoot(sumDigits(latest));
+  const add = (d, amount) => { d = Number(d); if(Number.isInteger(d) && d>=0 && d<=9) score[d] += amount; };
+  const info = twinInfo(latest);
+  const sameTwinCooldown = info.twins.length > 0;
+  add(K, sameTwinCooldown ? 210 : 520);
+  add(E, sameTwinCooldown ? 180 : 320);
+  add(Math.abs(K-A)%10, E === 0 ? 930 : 470);
+  add(Math.abs(K-L)%10, 380);
+  add(mod10(root+4), 560);
+  add(mod10(E+1), 430);
+  add(mod10(A+L), 430);
+  add(mod10(K+L), 350);
+  add(mod10(K+E), 320);
+  if(E === 0 || A === 0 || K === 0 || L === 0) add(0, 520);
+  if(mod10(A+E) === 0) add(A, 760);
+  if(info.twins.length){
+    info.twins.forEach(t => {
+      add(t, -900);
+      add(mod10(t+t), 520);
+      add(0, 460);
+    });
+  }
+  DIGITS.forEach(d => {
+    score[d] += 0.18*((candidate?.replayProfile?.twinScore || [])[d] || 0);
+    score[d] += 0.05*((candidate?.worldReplayScore || [])[d] || 0);
+  });
+  return score;
+}
+
+// V5.7: World Formula Replay
+// Mesin ini tidak mengunci angka berdasarkan pasaran. Ia membaca operasi matematika yang pernah tembus
+// pada transisi hari yang sama, lalu menerapkan operasi yang sama pada latest.
+function buildWorldFormulaReplayProfile(rows, targetDay){
+  const latest = rows?.[0] || {};
+  const chrono = (rows || []).slice().reverse();
+  const profile = {
+    code: latest.code || '-',
+    fromDay: latest.day || '-',
+    toDay: targetDay || '-',
+    total:0,
+    targetDayTotal:0,
+    digitTemplates:{},
+    twinTemplates:{},
+    pairTemplates:{AK:{}, LE:{}},
+    digitScore:Array(10).fill(0),
+    twinScore:Array(10).fill(0),
+    digitNotes:Array.from({length:10}, () => []),
+    twinNotes:Array.from({length:10}, () => []),
+    pairSeeds:{AK:[], LE:[]},
+    samples:[]
+  };
+  const addTemplate = (table, id, label, amount, note) => {
+    if(!id) return;
+    if(!table[id]) table[id] = {id, label, points:0, hits:0, near:0, examples:[]};
+    table[id].points += amount;
+    if(amount >= 35) table[id].hits += 1; else table[id].near += 1;
+    if(note && table[id].examples.length < 4) table[id].examples.push(note);
+  };
+  const addPairTemplate = (kind, id, label, amount, note) => addTemplate(profile.pairTemplates[kind], id, label, amount, note);
+
+  for(let i=0;i<chrono.length-1;i++){
+    const prev = chrono[i];
+    const next = chrono[i+1];
+    if(!prev?.digits || !next?.digits) continue;
+    const sameTransition = prev.day === profile.fromDay && next.day === profile.toDay;
+    const sameTargetDay = next.day === profile.toDay;
+    if(sameTransition) profile.total += 1;
+    if(sameTargetDay) profile.targetDayTotal += 1;
+    const recency = 1 + (i / Math.max(1, chrono.length-1));
+    const base = sameTransition ? 115*recency : (sameTargetDay ? 34*recency : 6*recency);
+    const ops = worldFormulaOps(prev);
+    const nextUnique = uniqueDigits(next.digits);
+    const nextTwins = twinInfo(next).twins || [];
+    ops.forEach(op => {
+      if(nextUnique.includes(op.digit)){
+        addTemplate(profile.digitTemplates, op.id, op.label, base * (op.weight || 1), `${prev.digits.join('')}→${next.digits.join('')} membuka ${op.digit}`);
+      }
+      if(nextTwins.includes(op.digit)){
+        addTemplate(profile.twinTemplates, op.id, op.label, (sameTransition ? 210*recency : 52*recency) * (op.twinWeight || op.weight || 1), `${prev.digits.join('')}→${next.digits.join('')} twin ${op.digit}${op.digit}`);
+      }
+    });
+
+    const pairOps = selectWorldPairOps(ops);
+    ['AK','LE'].forEach(kind => {
+      const actual = kind === 'AK' ? `${next.digits[0]}${next.digits[1]}` : `${next.digits[2]}${next.digits[3]}`;
+      for(let x=0; x<pairOps.length; x++){
+        for(let y=0; y<pairOps.length; y++){
+          const p = `${pairOps[x].digit}${pairOps[y].digit}`;
+          const id = `${pairOps[x].id}|${pairOps[y].id}`;
+          const label = `${pairOps[x].label} + ${pairOps[y].label}`;
+          if(p === actual){
+            addPairTemplate(kind, id, label, (sameTransition ? 430 : 96) * recency * (pairOps[x].pairWeight || 1) * (pairOps[y].pairWeight || 1), `${prev.digits.join('')}→${next.digits.join('')} ${kind} ${actual}`);
+          }else if(sameTransition && (p[0] === actual[0] || p[1] === actual[1])){
+            addPairTemplate(kind, id, label, 8 * recency, `${p} dekat ${actual}`);
+          }
+        }
+      }
+    });
+  }
+
+  const currentOps = worldFormulaOps(latest);
+  currentOps.forEach(op => {
+    const meta = profile.digitTemplates[op.id];
+    if(meta){
+      const value = Math.round(meta.points * (op.weight || 1));
+      profile.digitScore[op.digit] += value;
+      if(profile.digitNotes[op.digit].length < 5) profile.digitNotes[op.digit].push(`${op.label} (${Math.round(value)})`);
+    }
+    const twinMeta = profile.twinTemplates[op.id];
+    if(twinMeta){
+      const value = Math.round(twinMeta.points * (op.twinWeight || op.weight || 1));
+      profile.twinScore[op.digit] += value;
+      if(profile.twinNotes[op.digit].length < 5) profile.twinNotes[op.digit].push(`${op.label} (${Math.round(value)})`);
+    }
+  });
+
+  const currentPairOps = selectWorldPairOps(currentOps);
+  ['AK','LE'].forEach(kind => {
+    const seeds = [];
+    for(let x=0; x<currentPairOps.length; x++){
+      for(let y=0; y<currentPairOps.length; y++){
+        const id = `${currentPairOps[x].id}|${currentPairOps[y].id}`;
+        const meta = profile.pairTemplates[kind][id];
+        if(!meta) continue;
+        const pair = `${currentPairOps[x].digit}${currentPairOps[y].digit}`;
+        const bonus = Math.round(meta.points * (currentPairOps[x].pairWeight || 1) * (currentPairOps[y].pairWeight || 1));
+        seeds.push({pair, width:2, bonus, label:`world replay: ${currentPairOps[x].label} + ${currentPairOps[y].label}`, meta});
+      }
+    }
+    // Fallback ringan: gabungkan digit hasil replay terkuat agar AK/LE tidak hanya ikut carry lama.
+    const topDigits = DIGITS.slice().sort((a,b) => (profile.digitScore[b] || 0) - (profile.digitScore[a] || 0)).slice(0,5);
+    for(let i=0;i<topDigits.length;i++){
+      for(let j=0;j<topDigits.length;j++){
+        if(i === j && topDigits.length > 2) continue;
+        seeds.push({pair:`${topDigits[i]}${topDigits[j]}`, width:2, bonus:Math.max(900, 3200 - 380*i - 270*j), label:'world replay: gabungan digit operasi'});
+      }
+    }
+    profile.pairSeeds[kind] = mergePairSeeds(seeds).sort((a,b) => b.bonus - a.bonus || a.pair.localeCompare(b.pair)).slice(0,12);
+  });
+
+  if(profile.total || profile.targetDayTotal){
+    profile.samples.push(`Replay ${profile.code} ${profile.fromDay}→${profile.toDay}: ${profile.total} transisi utama, ${profile.targetDayTotal} target-day`);
+    profile.samples.push(`Digit replay: ${DIGITS.slice().sort((a,b)=>(profile.digitScore[b]||0)-(profile.digitScore[a]||0)).slice(0,6).map(d => `${d}:${Math.round(profile.digitScore[d]||0)}`).join(' | ')}`);
+    profile.samples.push(`Twin replay: ${DIGITS.slice().sort((a,b)=>(profile.twinScore[b]||0)-(profile.twinScore[a]||0)).slice(0,5).map(d => `${d}${d}:${Math.round(profile.twinScore[d]||0)}`).join(' | ')}`);
+    profile.samples.push(`AK replay: ${(profile.pairSeeds.AK||[]).slice(0,4).map(x => `${x.pair}:${Math.round(x.bonus)}`).join(' | ') || '-'}`);
+    profile.samples.push(`LE replay: ${(profile.pairSeeds.LE||[]).slice(0,4).map(x => `${x.pair}:${Math.round(x.bonus)}`).join(' | ') || '-'}`);
+  }
+  return profile;
+}
+
+function worldFormulaOps(row){
+  const a = row?.digits || [];
+  if(a.length < 4) return [];
+  const names = ['A','K','L','E'];
+  const out = [];
+  const add = (id, label, d, weight=1, pairWeight=1, twinWeight=1) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    out.push({id, label, digit:d, weight, pairWeight, twinWeight});
+  };
+  const m9 = d => mod10(9-d), m10 = d => mod10(10-d);
+  const root = digitalRoot(sumDigits(row));
+  const total = mod10(sumDigits(row));
+
+  a.forEach((d,i) => {
+    const n = names[i];
+    add(`carry_${n}`, `carry ${n}`, d, 1.2, 1.18, 1.05);
+    add(`m9_${n}`, `mirror9 ${n}`, m9(d), 1.08, 1.08, 1.0);
+    add(`m10_${n}`, `mirror10 ${n}`, m10(d), 1.08, 1.08, 1.0);
+    for(let k=1;k<=6;k++){
+      add(`up${k}_${n}`, `${n}+${k}`, mod10(d+k), 0.78 + 0.03*k, 0.78, 0.84);
+      add(`down${k}_${n}`, `${n}-${k}`, mod10(d-k), 0.78 + 0.03*k, 0.78, 0.84);
+    }
+  });
+  add('total_mod', 'total mod10', total, 1.05, 1.0, 0.9);
+  add('root', 'root total', root, 1.16, 1.08, 1.2);
+  add('m9_root', 'mirror9 root', m9(root), 0.96, 0.88, 0.95);
+  add('m10_root', 'mirror10 root', m10(root), 0.96, 0.88, 0.95);
+  for(let k=1;k<=6;k++){
+    add(`root_up${k}`, `root+${k}`, mod10(root+k), 0.86 + 0.03*k, 0.82, 1.02);
+    add(`root_down${k}`, `root-${k}`, mod10(root-k), 0.82 + 0.02*k, 0.78, 0.94);
+    add(`total_up${k}`, `total+${k}`, mod10(total+k), 0.74, 0.7, 0.78);
+    add(`total_down${k}`, `total-${k}`, mod10(total-k), 0.74, 0.7, 0.78);
+  }
+  const pairs = [
+    ['AK',0,1],['AL',0,2],['AE',0,3],['KL',1,2],['KE',1,3],['LE',2,3]
+  ];
+  pairs.forEach(([nm,i,j]) => {
+    const x=a[i], y=a[j];
+    add(`sum_${nm}`, `${nm} sum`, mod10(x+y), 1.14, 1.08, 1.08);
+    add(`diff_${nm}`, `${nm} diff`, Math.abs(x-y)%10, 1.08, 1.04, 1.15);
+    add(`dir_${nm}`, `${names[i]}-${names[j]}`, mod10(x-y), 0.9, 0.85, 0.9);
+    add(`dir_${names[j]}${names[i]}`, `${names[j]}-${names[i]}`, mod10(y-x), 0.9, 0.85, 0.9);
+    add(`prod_${nm}`, `${nm} prod`, mod10(x*y), 0.78, 0.74, 0.8);
+    add(`m9sum_${nm}`, `mirror9 ${nm} sum`, m9(mod10(x+y)), 0.92, 0.86, 0.9);
+    add(`m10sum_${nm}`, `mirror10 ${nm} sum`, m10(mod10(x+y)), 0.92, 0.86, 0.9);
+    add(`root_${nm}`, `root ${nm}`, digitalRoot(x+y), 0.88, 0.82, 0.86);
+  });
+  const triples = [
+    ['AKL',[0,1,2]],['AKE',[0,1,3]],['ALE',[0,2,3]],['KLE',[1,2,3]]
+  ];
+  triples.forEach(([nm,idxs]) => {
+    const v = mod10(idxs.reduce((s,i) => s + a[i], 0));
+    add(`sum_${nm}`, `${nm} sum`, v, 0.88, 0.78, 0.84);
+    add(`m9sum_${nm}`, `mirror9 ${nm}`, m9(v), 0.78, 0.7, 0.76);
+  });
+  const corner = mod10(a[0]+a[3]);
+  const middle = mod10(a[1]+a[2]);
+  add('corner_AE', 'corner A+E', corner, 1.06, 1.0, 1.0);
+  add('middle_KL', 'middle K+L', middle, 1.08, 1.0, 1.04);
+  add('corner_middle_diff', 'diff corner-middle', Math.abs(corner-middle)%10, 0.98, 0.88, 0.94);
+  add('corner_middle_sum', 'corner+middle', mod10(corner+middle), 0.9, 0.82, 0.88);
+
+  const info = twinInfo(row);
+  if(info.twins.length){
+    info.twins.forEach(t => {
+      add(`twin_carry_${t}`, `twin carry ${t}`, t, 0.9, 0.7, 0.72);
+      add(`twin_sum_${t}`, `twin ${t}+${t}`, mod10(t+t), 1.12, 0.92, 1.4);
+      add(`twin_zero_${t}`, `twin ${t}-${t}`, 0, 1.08, 0.88, 1.24);
+      add(`twin_up4_${t}`, `twin ${t}+4`, mod10(t+4), 0.94, 0.74, 1.05);
+      add(`twin_up6_${t}`, `twin ${t}+6`, mod10(t+6), 0.94, 0.74, 1.05);
+    });
+    const singles = info.singles || [];
+    if(singles.length){
+      singles.forEach((s,idx) => {
+        add(`single_m10_${idx}`, `single mirror10 ${s}`, m10(s), 0.95, 0.78, 0.95);
+        add(`single_m9_${idx}`, `single mirror9 ${s}`, m9(s), 0.9, 0.74, 0.9);
+        add(`single_down_${idx}`, `single ${s}-1`, mod10(s-1), 0.88, 0.72, 0.9);
+        add(`single_up_${idx}`, `single ${s}+1`, mod10(s+1), 0.88, 0.72, 0.9);
+      });
+      add('single_sum_after_twin', 'single sum after twin', mod10(singles.reduce((s,d)=>s+d,0)), 1.0, 0.82, 1.08);
+      if(singles.length >= 2) add('single_diff_after_twin', 'single diff after twin', Math.abs(singles[0]-singles[1])%10, 0.96, 0.78, 1.0);
+    }
+  }
+
+  const seen = new Set();
+  return out.filter(op => {
+    const key = `${op.id}|${op.digit}`;
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function selectWorldPairOps(ops){
+  const priority = ['carry_','m9_','m10_','sum_','diff_','root','total','corner','middle','twin_','single_'];
+  return (ops || [])
+    .filter(op => priority.some(p => op.id.startsWith(p) || op.id === p))
+    .sort((a,b) => (b.pairWeight || 1) - (a.pairWeight || 1) || a.id.localeCompare(b.id))
+    .slice(0,56);
+}
+
+function mergePairSeeds(seeds){
+  const map = {};
+  (seeds || []).forEach(s => {
+    if(!s || !/^\d{2}$/.test(s.pair)) return;
+    if(!map[s.pair]) map[s.pair] = {...s, notes:[], bonus:0};
+    map[s.pair].bonus = Math.max(map[s.pair].bonus, s.bonus || 0);
+    map[s.pair].label = (s.bonus || 0) >= (map[s.pair].bonus || 0) ? s.label : map[s.pair].label;
+  });
+  return Object.values(map);
+}
+
+function applyWorldFormulaReplay(candidate, latest, profile){
+  candidate.worldReplayScore = Array(10).fill(0);
+  candidate.worldReplayTwinScore = Array(10).fill(0);
+  if(!profile) return;
+  DIGITS.forEach(d => {
+    const digitPower = Math.round(0.52*(profile.digitScore?.[d] || 0));
+    if(digitPower > 0){
+      candidate.worldReplayScore[d] += digitPower;
+      addCandidateTrace(candidate, d, digitPower, `World formula replay ${profile.fromDay}→${profile.toDay}`, 'worldReplay');
+    }
+    const twinPower = Math.round(0.40*(profile.twinScore?.[d] || 0));
+    if(twinPower > 0){
+      candidate.worldReplayTwinScore[d] += twinPower;
+      addCandidateTrace(candidate, d, Math.round(twinPower*0.45), `World twin replay ${profile.fromDay}→${profile.toDay}`, 'worldReplay');
+    }
+  });
+}
+
+function forceWorldFormulaReplayRescue(selected, latest, candidate){
+  const profile = candidate.replayProfile;
+  if(!profile || !selected?.length) return;
+  const latestSet = uniqueDigits(latest?.digits || []);
+  const traceWidth = d => new Set((candidate.digitTrace?.[d] || []).map(x => x.family)).size;
+  const protectedSet = new Set();
+  // Jaga digit yang punya jejak luas; tetapi jangan proteksi semua carry latest.
+  selected.forEach(d => {
+    if(traceWidth(d) >= 5 && !latestSet.includes(d)) protectedSet.add(Number(d));
+  });
+  const candidates = DIGITS.slice()
+    .filter(d => !selected.includes(d) && (profile.digitScore?.[d] || 0) > 0)
+    .sort((a,b) => (profile.digitScore[b] || 0) - (profile.digitScore[a] || 0) || (candidate.score[b] || 0) - (candidate.score[a] || 0));
+  const threshold = Math.max(380, 0.42 * (profile.digitScore?.[candidates[0]] || 0));
+  candidates.slice(0,3).forEach(d => {
+    if((profile.digitScore[d] || 0) < threshold) return;
+    replaceWeakestForRescue(selected, d, candidate, protectedSet);
+    protectedSet.add(Number(d));
+  });
+}
+
+function worldReplayPairSeeds(latest, candidate, kind){
+  const profile = candidate?.replayProfile;
+  if(!profile) return [];
+  return (profile.pairSeeds?.[kind] || []).slice(0,10).map((x,i) => ({
+    pair:x.pair,
+    width:2,
+    bonus:Math.round(6200 + Math.min(26000, (x.bonus || 0)*1.45) - i*240),
+    label:x.label || 'world formula replay'
+  }));
+}
+
+function applyWorldReplayPairLock(ranked, kind, latest, candidate){
+  const seeds = worldReplayPairSeeds(latest, candidate, kind).slice(0,5);
+  if(!seeds.length) return ranked;
+  const map = {};
+  ranked.forEach(x => map[x.pair] = {...x, notes:[...(x.notes || [])]});
+  const ensure = (pair, points, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!map[pair]) map[pair] = {pair, points:0, notes:[]};
+    map[pair].points = Math.max(map[pair].points, points);
+    if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
+  };
+  seeds.forEach((s,i) => ensure(s.pair, 19600 + Math.max(0, s.bonus || 0) - i*900, 'world formula replay lock'));
+  return Object.values(map).sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
+}
+
+function buildWorldFormulaReplayAudit(profile, candidate){
+  if(!profile) return null;
+  return {
+    title:`World formula replay ${profile.code}: ${profile.fromDay} → ${profile.toDay}`,
+    digits:DIGITS.slice().sort((a,b)=>(profile.digitScore[b]||0)-(profile.digitScore[a]||0)).slice(0,6).map(d => `${d}:${Math.round(profile.digitScore[d]||0)} ${profile.digitNotes[d]?.[0] || ''}`).join(' | '),
+    twin:DIGITS.slice().sort((a,b)=>(profile.twinScore[b]||0)-(profile.twinScore[a]||0)).slice(0,5).map(d => `${d}${d}:${Math.round(profile.twinScore[d]||0)}`).join(' | '),
+    ak:(profile.pairSeeds?.AK || []).slice(0,5).map(x => `${x.pair}:${Math.round(x.bonus)}`).join(' | ') || '-',
+    le:(profile.pairSeeds?.LE || []).slice(0,5).map(x => `${x.pair}:${Math.round(x.bonus)}`).join(' | ') || '-',
+    samples:profile.samples || []
   };
 }
 
@@ -1898,6 +2317,12 @@ function chooseTwinDigit(candidate, finalDigits, latest){
   targetTwinDigits.forEach((x,i) => add(x.d, 660 + 240*x.c - 90*i, 'riwayat twin transisi hari'));
   DIGITS.slice().sort((x,y) => ((market.twinScore || [])[y] || 0)-((market.twinScore || [])[x] || 0)).slice(0,3)
     .forEach((d,i) => add(d, 140 - 35*i, 'market twin memory ringan'));
+  DIGITS.forEach(d => {
+    const replayTwin = candidate.replayProfile?.twinScore?.[d] || 0;
+    if(replayTwin > 0) add(d, Math.round(0.68*replayTwin), 'world formula replay twin');
+  });
+  const diagTwin = twinDiagnosticScores(latest, candidate);
+  DIGITS.forEach(d => { if(diagTwin[d]) add(d, diagTwin[d], 'diagnostic twin gate'); });
 
   if(a.length >= 4){
     const ae = mod10(a[0] + a[3]);
@@ -1943,7 +2368,11 @@ function chooseTwinDigit(candidate, finalDigits, latest){
   // V5.6: root/riwayat transisi diberi hak rotasi agar kandidat tidak terkunci 66 terus.
   let chosen = null;
   const sorted = DIGITS.map(d => ({digit:d, points:score[d], reasons:reason[d]})).sort((x,y) => y.points-x.points || x.digit-y.digit);
-  if(a.length >= 4 && !twins.length){
+  const replayTwinTop = DIGITS.map(d => ({digit:d, points:candidate.replayProfile?.twinScore?.[d] || 0})).sort((x,y) => y.points-x.points || x.digit-y.digit)[0];
+  if(replayTwinTop && replayTwinTop.points >= 520 && (!twins.length || !twins.includes(replayTwinTop.digit))){
+    chosen = replayTwinTop.digit;
+  }
+  if(chosen == null && a.length >= 4 && !twins.length){
     const ae = mod10(a[0] + a[3]);
     if(ae === 0){
       chosen = a[0];
@@ -2013,7 +2442,9 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(postTwinSpreadPairSeeds(latest, candidate, targetAnchor, kind), 0, 'post-twin spread lock');
   pushSeeds(marketAdaptivePairSeeds(latest, candidate, kind), 0, 'market adaptive memory');
   pushSeeds(akleFlowPairSeeds(latest, candidate, kind), 0, 'AKLE flow gate');
+  pushSeeds(diagnosticAKLEPairSeeds(latest, candidate, kind), 0, 'diagnostic AKLE gate');
   pushSeeds(centerBridgePairSeeds(latest, candidate, kind), 0, 'center bridge formula');
+  pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
   // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
   if(targetAnchor && (targetAnchor.digits || []).length >= 4){
@@ -2105,7 +2536,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   const ranked = Object.values(scored)
     .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
   const positionLocked = applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate);
-  return applyCenterBridgePairLock(applyAKLETransitionLock(positionLocked, kind, latest, candidate), kind, latest, candidate).slice(0,5);
+  return applyDiagnosticAKLEPairLock(applyWorldReplayPairLock(applyCenterBridgePairLock(applyAKLETransitionLock(positionLocked, kind, latest, candidate), kind, latest, candidate), kind, latest, candidate), kind, latest, candidate).slice(0,5);
 }
 
 
@@ -2469,6 +2900,7 @@ function renderResult(r){
   const twinCycleHtml = r.audit.twinCycle ? `<div><b>Twin cycle history</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinCycle.title)}</li><li>Latest twin: ${escapeHtml(r.audit.twinCycle.latestTwins)}</li><li>Repeat sama: ${escapeHtml(r.audit.twinCycle.sameRepeat)}</li><li>Twin berikutnya: ${escapeHtml(r.audit.twinCycle.nextTwin)}</li><li>Digit twin historis: ${escapeHtml(r.audit.twinCycle.nextTwinDigits)}</li><li>Status: ${escapeHtml(r.audit.twinCycle.cooldown)}</li></ul></div>` : '';
   const complementHtml = r.audit.complementBridge ? `<div><b>Complement bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.complementBridge.title)}</li><li>${escapeHtml(r.audit.complementBridge.digits)}</li></ul></div>` : '';
   const centerBridgeHtml = r.audit.centerBridge ? `<div><b>Center bridge formula</b><ul class="process-list small"><li>${escapeHtml(r.audit.centerBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.centerBridge.digits)}</li><li>Twin: ${escapeHtml(r.audit.centerBridge.twin)}</li></ul></div>` : '';
+  const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
     <div class="audit-columns">
@@ -2480,6 +2912,7 @@ function renderResult(r){
       ${twinCycleHtml}
       ${complementHtml}
       ${centerBridgeHtml}
+      ${worldReplayHtml}
       ${marketHtml}
       <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
     </div>
@@ -2490,7 +2923,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V5.6 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, post-twin adaptive spread, complement zero bridge, AK K+A lock, LE zero+A lock, center bridge K+L/K+E, market carry brake, dan center-bridge twin audit.</p>
+      <p class="tagline">Engine V5.7 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, post-twin adaptive spread, complement zero bridge, AK K+A lock, LE zero+A lock, center bridge K+L/K+E, market carry brake, dan center-bridge twin audit.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
