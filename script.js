@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V5.3 • Market Adaptive Memory';
+const APP_VERSION = 'IPHOEL Formula Engine V5.4 • Market Carry Brake';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -161,9 +161,11 @@ function buildFormulaPrediction(inputRows){
   forceTwinSingleMirrorExpandedRescue(finalDigits, latest, candidate);
   forceTransitionCarryRescue(finalDigits, latest, candidate);
   forceMarketAdaptiveMemoryRescue(finalDigits, latest, candidate);
+  forceMarketCarryBalanceRescue(finalDigits, latest, candidate);
   forceBoundaryTailMirrorRescue(finalDigits, latest, candidate);
   forcePostTwinSpreadRescue(finalDigits, latest, candidate);
   forceComplementCarryBridgeRescue(finalDigits, latest, candidate);
+  forceMarketCarryBalanceRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.twinLab = buildTwinLabAudit(candidate.twinAudit);
@@ -211,6 +213,19 @@ function buildMarketAdaptiveProfile(rows, allRows, targetDay){
     twinDigitCounts:Array(10).fill(0),
     pairTemplateStats:{AK:{}, LE:{}},
     strongestTemplates:{AK:[], LE:[]},
+    carryOverlapDist:{},
+    targetCarryMax:4,
+    targetCarryAvg:0,
+    targetCarrySoftCap:3,
+    targetCarryHardCap:4,
+    targetCarrySamples:0,
+    positionCarry:Array(4).fill(0),
+    positionCarryRate:Array(4).fill(0),
+    carryDigitCounts:Array(10).fill(0),
+    nonCarryDigitCounts:Array(10).fill(0),
+    nonCarryScore:Array(10).fill(0),
+    twinAfterNoTwinCounts:Array(10).fill(0),
+    twinAfterNoTwinScore:Array(10).fill(0),
     samples:[],
     transitionSamples:[]
   };
@@ -235,6 +250,8 @@ function buildMarketAdaptiveProfile(rows, allRows, targetDay){
     if(note && table[tpl.id].examples.length < 4) table[tpl.id].examples.push(note);
   };
 
+  let carryOverlapTotal = 0;
+  let carryOverlapMax = 0;
   for(let i=0;i<chrono.length-1;i++){
     const prev = chrono[i];
     const next = chrono[i+1];
@@ -246,9 +263,28 @@ function buildMarketAdaptiveProfile(rows, allRows, targetDay){
     }
     if(sameTransition){
       profile.total += 1;
+      const prevUnique = uniqueDigits(prev.digits);
+      const nextUnique = uniqueDigits(next.digits);
+      const carryOverlap = nextUnique.filter(d => prevUnique.includes(d)).length;
+      profile.carryOverlapDist[carryOverlap] = (profile.carryOverlapDist[carryOverlap] || 0) + 1;
+      carryOverlapTotal += carryOverlap;
+      carryOverlapMax = Math.max(carryOverlapMax, carryOverlap);
+      profile.targetCarrySamples += 1;
+      nextUnique.forEach(d => {
+        if(prevUnique.includes(d)) profile.carryDigitCounts[d] += 1.0 * recencyBoost;
+        else profile.nonCarryDigitCounts[d] += 1.35 * recencyBoost;
+      });
+      for(let pos=0; pos<4; pos++){
+        if(next.digits && prev.digits && next.digits[pos] === prev.digits[pos]) profile.positionCarry[pos] += 1;
+      }
       uniqueDigits(next.digits).forEach(d => addDigit(d, 1.85 * recencyBoost));
-      twinInfo(next).twins.forEach(d => addTwinDigit(d, 2.4 * recencyBoost));
-      if(profile.transitionSamples.length < 8) profile.transitionSamples.push(`${prev.day} ${prev.digits.join('')} → ${next.day} ${next.digits.join('')}`);
+      const prevHadTwin = twinInfo(prev).twins.length > 0;
+      const nextTwins = twinInfo(next).twins;
+      nextTwins.forEach(d => {
+        addTwinDigit(d, 2.4 * recencyBoost);
+        if(!prevHadTwin) profile.twinAfterNoTwinCounts[d] += 2.1 * recencyBoost;
+      });
+      if(profile.transitionSamples.length < 8) profile.transitionSamples.push(`${prev.day} ${prev.digits.join('')} → ${next.day} ${next.digits.join('')} | carry overlap ${carryOverlap}`);
     }
 
     ['AK','LE'].forEach(kind => {
@@ -269,10 +305,21 @@ function buildMarketAdaptiveProfile(rows, allRows, targetDay){
 
   const denom = Math.max(1, profile.total*1.85 + profile.targetDayTotal*0.34);
   profile.nextDigitRate = profile.nextDigitCounts.map(x => x / denom);
+  profile.targetCarryAvg = profile.targetCarrySamples ? carryOverlapTotal / profile.targetCarrySamples : 2.4;
+  profile.targetCarryMax = profile.targetCarrySamples ? carryOverlapMax : 4;
+  const overTwo = Object.keys(profile.carryOverlapDist).map(Number).filter(k => k > 2).reduce((s,k) => s + (profile.carryOverlapDist[k] || 0), 0);
+  const overTwoRate = profile.targetCarrySamples ? overTwo / profile.targetCarrySamples : 1;
+  // V5.4: jika transisi market historis tidak pernah membawa lebih dari 2 digit,
+  // output tidak boleh terlalu penuh oleh angka latest. Ini rem, bukan hardcode angka.
+  profile.targetCarrySoftCap = profile.targetCarrySamples >= 5 && overTwoRate <= 0.16 ? 2 : Math.max(2, Math.min(3, Math.round(profile.targetCarryAvg + 1)));
+  profile.targetCarryHardCap = profile.targetCarrySamples >= 5 && overTwoRate <= 0.16 ? 2 : Math.max(profile.targetCarrySoftCap, Math.min(4, profile.targetCarryMax || 3));
+  profile.positionCarryRate = profile.positionCarry.map(x => profile.total ? x / profile.total : 0);
   DIGITS.forEach(d => {
     // Digit memory bukan pengganti rumus; ia hanya kalibrasi lokal dari transisi pasaran yang sedang ditempel.
     profile.digitScore[d] = Math.round(320 + 1850*profile.nextDigitRate[d] + 38*Math.min(6, profile.nextDigitCounts[d]));
+    profile.nonCarryScore[d] = Math.round(170 + 620*(profile.nonCarryDigitCounts[d] || 0));
     profile.twinScore[d] = Math.round(220 + 680*(profile.twinDigitCounts[d] || 0));
+    profile.twinAfterNoTwinScore[d] = Math.round(160 + 760*(profile.twinAfterNoTwinCounts[d] || 0));
   });
   ['AK','LE'].forEach(kind => {
     profile.strongestTemplates[kind] = Object.values(profile.pairTemplateStats[kind])
@@ -283,6 +330,7 @@ function buildMarketAdaptiveProfile(rows, allRows, targetDay){
   if(profile.total || profile.targetDayTotal){
     const topDigits = DIGITS.slice().sort((a,b) => profile.digitScore[b]-profile.digitScore[a]).slice(0,6).join(' ');
     profile.samples.push(`Digit lokal terkuat ${profile.fromDay}→${profile.toDay}: ${topDigits}`);
+    profile.samples.push(`Carry cap ${profile.fromDay}→${profile.toDay}: soft ${profile.targetCarrySoftCap}, hard ${profile.targetCarryHardCap}, distribusi ${Object.keys(profile.carryOverlapDist).sort((a,b)=>Number(a)-Number(b)).map(k => `${k}:${profile.carryOverlapDist[k]}`).join(' | ') || '-'}`);
     if(profile.strongestTemplates.AK.length) profile.samples.push(`Template AK: ${profile.strongestTemplates.AK.slice(0,3).map(x => x.label).join(' | ')}`);
     if(profile.strongestTemplates.LE.length) profile.samples.push(`Template LE: ${profile.strongestTemplates.LE.slice(0,3).map(x => x.label).join(' | ')}`);
   }
@@ -338,6 +386,8 @@ function marketPairTransformSeeds(row, kind){
 
 function applyMarketAdaptiveMemory(candidate, latest, targetAnchor, profile){
   candidate.marketMemoryScore = Array(10).fill(0);
+  candidate.marketNonCarryScore = Array(10).fill(0);
+  candidate.marketCarryScore = Array(10).fill(0);
   if(!profile || !profile.marketRows) return;
   const add = (d, amount, note) => {
     d = Number(d);
@@ -348,6 +398,11 @@ function applyMarketAdaptiveMemory(candidate, latest, targetAnchor, profile){
   DIGITS.forEach(d => {
     const base = profile.digitScore?.[d] || 0;
     if(base > 0) add(d, Math.round(0.55*base), `Market memory ${profile.code} ${profile.fromDay}→${profile.toDay}`);
+    const nonCarry = profile.nonCarryScore?.[d] || 0;
+    const carryLocal = profile.carryDigitCounts?.[d] || 0;
+    candidate.marketNonCarryScore[d] = nonCarry;
+    candidate.marketCarryScore[d] = Math.round(120 + 480*carryLocal);
+    if(nonCarry > 220) add(d, Math.round(0.22*nonCarry), `Market non-carry spread ${profile.code}`);
     const twin = profile.twinScore?.[d] || 0;
     if(twin > 300) add(d, Math.round(0.28*twin), `Market twin memory ${profile.code}`);
   });
@@ -360,6 +415,56 @@ function applyMarketAdaptiveMemory(candidate, latest, targetAnchor, profile){
   });
   if(targetAnchor && targetAnchor.digits){
     uniqueDigits(targetAnchor.digits).forEach(d => add(d, 95, `Market anchor support ${profile.code}`));
+  }
+}
+
+function forceMarketCarryBalanceRescue(selected, latest, candidate){
+  const profile = candidate.marketProfile;
+  if(!profile || profile.total < 5 || !latest?.digits?.length) return;
+  const latestSet = uniqueDigits(latest.digits);
+  const hardCap = Number(profile.targetCarryHardCap || 4);
+  if(hardCap >= 4) return;
+  let carrySelected = selected.filter(d => latestSet.includes(Number(d)));
+  if(carrySelected.length <= hardCap) return;
+
+  const traceWidth = d => new Set((candidate.digitTrace?.[d] || []).map(x => x.family)).size;
+  const posRateByDigit = d => {
+    let best = 0;
+    (latest.digits || []).forEach((x,idx) => { if(Number(x) === Number(d)) best = Math.max(best, profile.positionCarryRate?.[idx] || 0); });
+    return best;
+  };
+  const carryStrength = d =>
+    (candidate.score?.[d] || 0) +
+    10*traceWidth(d) +
+    460*posRateByDigit(d) +
+    0.26*((candidate.marketCarryScore || [])[d] || 0) +
+    0.16*((candidate.targetAnchorScore || [])[d] || 0);
+
+  const protectedCarry = new Set(
+    carrySelected.slice().sort((a,b) => carryStrength(b)-carryStrength(a)).slice(0, hardCap).map(Number)
+  );
+
+  const outsiderScore = d =>
+    (candidate.score?.[d] || 0) +
+    0.95*((candidate.marketNonCarryScore || [])[d] || 0) +
+    0.38*((candidate.marketMemoryScore || [])[d] || 0) +
+    10*traceWidth(d) +
+    0.10*((candidate.targetAnchorScore || [])[d] || 0);
+
+  const outsiders = DIGITS.slice()
+    .filter(d => !selected.includes(d) && !latestSet.includes(d))
+    .sort((a,b) => outsiderScore(b) - outsiderScore(a) || a-b);
+
+  for(const outsider of outsiders){
+    carrySelected = selected.filter(d => latestSet.includes(Number(d)));
+    if(carrySelected.length <= hardCap) break;
+    const victim = carrySelected
+      .filter(d => !protectedCarry.has(Number(d)))
+      .sort((a,b) => carryStrength(a)-carryStrength(b) || candidate.score[a]-candidate.score[b])[0];
+    if(victim == null) break;
+    // V5.4: hard cap benar-benar diterapkan jika sejarah transisi market membuktikan
+    // carry lebih dari batas ini hampir tidak terjadi. Outsider tetap dipilih dari skor non-carry terbaik.
+    selected[selected.indexOf(victim)] = outsider;
   }
 }
 
@@ -401,12 +506,14 @@ function buildMarketProfileAudit(profile, latest){
   if(!profile || !profile.marketRows) return null;
   const topDigits = DIGITS.slice().sort((a,b) => (profile.digitScore[b]||0)-(profile.digitScore[a]||0)).slice(0,6).map(d => `${d}:${Math.round(profile.digitScore[d]||0)}`).join(' | ');
   const topTwin = DIGITS.slice().sort((a,b) => (profile.twinScore[b]||0)-(profile.twinScore[a]||0)).slice(0,4).map(d => `${d}${d}:${Math.round(profile.twinScore[d]||0)}`).join(' | ');
+  const nonCarry = DIGITS.slice().sort((a,b) => (profile.nonCarryScore[b]||0)-(profile.nonCarryScore[a]||0)).slice(0,5).map(d => `${d}:${Math.round(profile.nonCarryScore[d]||0)}`).join(' | ');
+  const carryDist = Object.keys(profile.carryOverlapDist || {}).sort((a,b)=>Number(a)-Number(b)).map(k => `${k}:${profile.carryOverlapDist[k]}`).join(' | ');
   const ak = (profile.strongestTemplates?.AK || []).slice(0,3).map(x => x.label).join(' | ') || '-';
   const le = (profile.strongestTemplates?.LE || []).slice(0,3).map(x => x.label).join(' | ') || '-';
   return {
     title:`Market adaptive ${profile.code}: ${profile.fromDay} → ${profile.toDay} (${profile.total} transisi, ${profile.marketRows} baris)`,
     digits: topDigits,
-    twin: topTwin,
+    twin: `${topTwin}. Carry cap ${profile.targetCarryHardCap}; overlap ${carryDist || '-'}; non-carry ${nonCarry}`,
     ak,
     le,
     samples:(profile.transitionSamples || []).slice(0,4)
@@ -982,6 +1089,8 @@ function buildTwinCycleProfile(rows, targetDay){
   const addTwinCounts = (digits) => {
     twinInfo({digits}).twins.forEach(d => profile.nextTwinDigits[d] = (profile.nextTwinDigits[d] || 0) + 1);
   };
+  let carryOverlapTotal = 0;
+  let carryOverlapMax = 0;
   for(let i=0;i<chrono.length-1;i++){
     const prev = chrono[i];
     const next = chrono[i+1];
@@ -1185,6 +1294,8 @@ function buildTransitionProfile(rows, targetDay){
     samples: []
   };
   if(!profile.fromDay || profile.fromDay === '-' || !profile.toDay || profile.toDay === '-') return profile;
+  let carryOverlapTotal = 0;
+  let carryOverlapMax = 0;
   for(let i=0;i<chrono.length-1;i++){
     const prev = chrono[i];
     const next = chrono[i+1];
@@ -1453,6 +1564,7 @@ function buildTwinLabScores(candidate, finalDigits, latest){
     add(d, 0.52*((candidate.boundaryTailScore || [])[d] || 0), 'boundary-tail lab');
     add(d, 0.44*((candidate.marketMemoryScore || [])[d] || 0), 'market adaptive digit memory');
     add(d, 0.70*((candidate.marketProfile?.twinScore || [])[d] || 0), 'market adaptive twin cycle');
+    add(d, 0.62*((candidate.marketProfile?.twinAfterNoTwinScore || [])[d] || 0), 'market twin-after-non-twin memory');
     if((finalDigits || []).includes(d)) add(d, 360, 'masuk 6 digit formula');
   });
   if(a.length >= 4){
@@ -1619,9 +1731,11 @@ function chooseTwinDigit(candidate, finalDigits, latest){
         .sort((x,y) => y.points - x.points || x.digit-y.digit)[0]?.digit;
     }else{
       const seed = mod10(a[2]+a[3]);
-      const priority = uniqueDigits([seed, root, mod10(9-root)]);
+      const marketTwin = candidate.marketProfile?.twinAfterNoTwinScore || [];
+      const marketTop = DIGITS.slice().sort((x,y) => (marketTwin[y]||0)-(marketTwin[x]||0)).slice(0,3);
+      const priority = uniqueDigits([seed, root, mod10(9-root), ...marketTop]);
       chosen = ranked
-        .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * 0.90))
+        .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * 0.78))
         .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
     }
   }
@@ -1650,6 +1764,8 @@ function learnOrderedPairWeights(chrono, formulas, kind){
     table[pair].points += amount;
     if(note && table[pair].notes.length < 4) table[pair].notes.push(note);
   };
+  let carryOverlapTotal = 0;
+  let carryOverlapMax = 0;
   for(let i=0;i<chrono.length-1;i++){
     const prev = chrono[i];
     const next = chrono[i+1];
@@ -2054,6 +2170,8 @@ function inferTargetDay(rows){
   if(!latest) return '-';
   const chrono = rows.slice().reverse();
   const nextDayScore = {};
+  let carryOverlapTotal = 0;
+  let carryOverlapMax = 0;
   for(let i=0;i<chrono.length-1;i++){
     const prev = chrono[i];
     const next = chrono[i+1];
