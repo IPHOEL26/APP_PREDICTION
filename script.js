@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V5.4 • Market Carry Brake';
+const APP_VERSION = 'IPHOEL Formula Engine V5.6 • Twin Gate Balancer + AKLE Flow';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -152,6 +152,7 @@ function buildFormulaPrediction(inputRows){
   applyMarketAdaptiveMemory(candidate, latest, targetAnchor, marketProfile);
   applyBoundaryTailMirrorCluster(candidate, latest, targetAnchor, transitionProfile);
   applyComplementCarryBridge(candidate, latest, targetAnchor, transitionProfile);
+  applyCenterBridgeFormula(candidate, latest, targetAnchor, marketProfile);
   applyPostTwinAdaptiveSpread(candidate, latest, targetAnchor, transitionProfile, twinCycleProfile);
   const akle = buildAKLEPrediction(rows, candidate, formulas, targetAnchor);
   const finalDigits = chooseFormulaDigits(candidate, latest);
@@ -165,7 +166,9 @@ function buildFormulaPrediction(inputRows){
   forceBoundaryTailMirrorRescue(finalDigits, latest, candidate);
   forcePostTwinSpreadRescue(finalDigits, latest, candidate);
   forceComplementCarryBridgeRescue(finalDigits, latest, candidate);
+  forceCenterBridgeRescue(finalDigits, latest, candidate);
   forceMarketCarryBalanceRescue(finalDigits, latest, candidate);
+  forceCenterBridgeRescue(finalDigits, latest, candidate);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest);
   const audit = buildLocalFormulaAudit(rows, formulas, learned, learnedWeekLatest, learnedWeekTarget);
   audit.twinLab = buildTwinLabAudit(candidate.twinAudit);
@@ -174,6 +177,7 @@ function buildFormulaPrediction(inputRows){
   audit.transitionProfile = buildTransitionProfileAudit(transitionProfile, latest);
   audit.marketProfile = buildMarketProfileAudit(marketProfile, latest);
   audit.complementBridge = buildComplementBridgeAudit(candidate.complementBridgeAudit);
+  audit.centerBridge = buildCenterBridgeAudit(candidate.centerBridgeAudit);
   audit.process = buildProcessCards(rows, formulas);
   return {rows, allRows, latest, targetDay, targetAnchor, transitionProfile, twinCycleProfile, marketProfile, formulas, learned, learnedDay, learnedWeekLatest, learnedWeekTarget, candidate, finalDigits, twinDigit, akle, audit};
 }
@@ -366,7 +370,10 @@ function marketPairTransformSeeds(row, kind){
     add('root_carryK', pair(root,a[1]), 'root + carry K', 0.9);
     add('total_carryA', pair(total,a[0]), 'total mod10 + carry A', 0.85);
     add('mirrorE_mirror10E', pair(m9(a[3]),m10(a[3])), 'cermin ekor 9/10', 0.9);
+    add('carryE_KE', pair(a[3],ke), 'carry E + K+E', 1.18);
+    add('carryE_KL', pair(a[3],kl), 'carry E + K+L', 1.0);
     add('midDiff_KL', pair(midDiff,kl), 'beda sudut-tengah + K+L', 0.82);
+    add('KL_AK', pair(kl,ak), 'K+L + A+K', 0.98);
   }else{
     add('carry_LE', pair(a[2],a[3]), 'carry L-E', 1.0);
     add('reverse_EL', pair(a[3],a[2]), 'balik E-L', 0.95);
@@ -377,9 +384,13 @@ function marketPairTransformSeeds(row, kind){
     add('root_root', pair(root,root), 'root-root', 1.0);
     add('root_carryE', pair(root,a[3]), 'root + carry E', 0.9);
     add('mirror10E_downE', pair(m10(a[3]),mod10(a[3]-1)), 'mirror10 E + tetangga turun E', 0.92);
+    add('carryK_mirror10E', pair(a[1],m10(a[3])), 'carry K + mirror10 E', 1.22);
+    add('carryK_mirror9E', pair(a[1],m9(a[3])), 'carry K + mirror9 E', 1.0);
     add('mirrorL_carryE', pair(m9(a[2]),a[3]), 'mirror9 L + carry E', 0.86);
     add('AL_carryA', pair(al,a[0]), 'A+L + carry A', 0.82);
     add('KE_carryK', pair(ke,a[1]), 'K+E + carry K', 0.82);
+    add('KL_KE', pair(kl,ke), 'K+L + K+E', 1.16);
+    add('KL_AK', pair(kl,ak), 'K+L + A+K', 0.94);
   }
   return out;
 }
@@ -485,6 +496,71 @@ function forceMarketAdaptiveMemoryRescue(selected, latest, candidate){
     replaceWeakestForRescue(selected, d, candidate, protectedSet);
     protectedSet.add(Number(d));
   });
+}
+
+
+
+function akleFlowPairSeeds(latest, candidate, kind){
+  const a = latest?.digits || [];
+  if(a.length < 4) return [];
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair,width:2,bonus,label}); };
+  const ae = mod10(a[0] + a[3]);
+  const kl = mod10(a[1] + a[2]);
+  const ke = mod10(a[1] + a[3]);
+  const m10e = mod10(10 - a[3]);
+  const m9e = mod10(9 - a[3]);
+  const lowCarry = Number(candidate?.marketProfile?.targetCarrySamples || candidate?.marketProfile?.total || 0) >= 5 && Number(candidate?.marketProfile?.targetCarryHardCap || 4) <= 2;
+  if(ae === 0){
+    // Complement zero bridge: contoh 6934 → AK 96 dan LE 06.
+    if(kind === 'AK'){
+      add(`${a[1]}${a[0]}`, 19800, 'AK complement flow: carry K + carry A');
+      add(`${a[1]}${ae}`, 8800, 'AK complement flow: carry K + zero bridge');
+    }else{
+      add(`${ae}${a[0]}`, 21400, 'LE complement flow: zero bridge + carry A');
+      add(`${ae}${a[1]}`, 9800, 'LE complement flow: zero bridge + carry K');
+      add(`${a[0]}${ae}`, 7200, 'LE complement flow: carry A + zero bridge');
+    }
+  }else if(lowCarry){
+    // Low-carry flow: jangan hanya carry; baca E→center dan K→mirror ekor.
+    if(kind === 'AK'){
+      add(`${a[3]}${ke}`, 11800, 'AK flow: carry E + K+E');
+      add(`${a[3]}${kl}`, 7400, 'AK flow: carry E + K+L');
+      add(`${kl}${ke}`, 5200, 'AK flow: K+L + K+E');
+    }else{
+      add(`${a[1]}${m10e}`, 12600, 'LE flow: carry K + mirror10 E');
+      add(`${a[1]}${m9e}`, 7600, 'LE flow: carry K + mirror9 E');
+      add(`${kl}${m10e}`, 5200, 'LE flow: K+L + mirror10 E');
+    }
+  }
+  return seeds;
+}
+
+function centerBridgePairSeeds(latest, candidate, kind){
+  const a = latest?.digits || [];
+  if(a.length < 4) return [];
+  const profile = candidate?.marketProfile;
+  const lowCarry = Number(profile?.targetCarrySamples || profile?.total || 0) >= 5 && Number(profile?.targetCarryHardCap || 4) <= 2;
+  const kl = mod10(a[1] + a[2]);
+  const ke = mod10(a[1] + a[3]);
+  const ak = mod10(a[0] + a[1]);
+  const le = mod10(a[2] + a[3]);
+  const root = digitalRoot(sumDigits(latest));
+  const base = lowCarry ? 13200 : 5200;
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair,width:2,bonus,label}); };
+  if(kind === 'AK'){
+    add(`${kl}${a[1]}`, base + 1200, 'AK center bridge: K+L + carry K');
+    add(`${kl}${ak}`, Math.round(base*0.74), 'AK center bridge: K+L + A+K');
+    add(`${ke}${a[1]}`, Math.round(base*0.52), 'AK center bridge: K+E + carry K');
+    add(`${root}${a[1]}`, Math.round(base*0.34), 'AK center bridge: root + carry K');
+  }else{
+    add(`${kl}${ke}`, base + 1800, 'LE center bridge: K+L + K+E');
+    add(`${kl}${a[3]}`, Math.round(base*0.70), 'LE center bridge: K+L + carry E');
+    add(`${ke}${kl}`, Math.round(base*0.58), 'LE center bridge: K+E + K+L');
+    add(`${le}${ke}`, Math.round(base*0.42), 'LE center bridge: L+E + K+E');
+  }
+  return seeds;
 }
 
 function marketAdaptivePairSeeds(latest, candidate, kind){
@@ -1473,6 +1549,101 @@ function buildComplementBridgeAudit(audit){
 }
 
 
+function applyCenterBridgeFormula(candidate, latest, targetAnchor, marketProfile){
+  candidate.centerBridgeScore = Array(10).fill(0);
+  candidate.centerBridgeTwinScore = Array(10).fill(0);
+  candidate.centerBridgeDigits = [];
+  candidate.centerBridgeTwinDigits = [];
+  candidate.centerBridgeAudit = null;
+  const a = latest?.digits || [];
+  if(a.length < 4) return;
+  const counts = countMap(a);
+  const latestHasTwin = Object.values(counts).some(v => v >= 2);
+  const kl = mod10(a[1] + a[2]);
+  const ke = mod10(a[1] + a[3]);
+  const ak = mod10(a[0] + a[1]);
+  const le = mod10(a[2] + a[3]);
+  const al = mod10(a[0] + a[2]);
+  const ae = mod10(a[0] + a[3]);
+  const root = digitalRoot(sumDigits(latest));
+  const hardCap = Number(marketProfile?.targetCarryHardCap || 4);
+  const samples = Number(marketProfile?.targetCarrySamples || marketProfile?.total || 0);
+  const nonCarry = marketProfile?.nonCarryScore || Array(10).fill(0);
+  const digitMemory = marketProfile?.digitScore || Array(10).fill(0);
+  const lowCarryTransition = samples >= 5 && hardCap <= 2;
+  const add = (d, amount, note, twin=false) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.centerBridgeScore[d] += amount;
+    if(twin) candidate.centerBridgeTwinScore[d] += Math.round(amount * 0.9);
+    addCandidateTrace(candidate, d, amount, note, 'centerBridge');
+  };
+
+  const marketBoost = d => Math.round(0.10*(digitMemory[d] || 0) + 0.18*(nonCarry[d] || 0));
+  const base = lowCarryTransition ? 1480 : 680;
+  add(kl, base + marketBoost(kl), 'Center bridge K+L', !latestHasTwin);
+  add(ke, Math.round(base*0.92) + marketBoost(ke), 'Center bridge K+E', !latestHasTwin && lowCarryTransition);
+  add(ak, Math.round(base*0.72) + marketBoost(ak), 'Center bridge A+K support', false);
+  add(le, Math.round(base*0.44) + marketBoost(le), 'Center bridge L+E support', false);
+  add(root, 260 + marketBoost(root), 'Center bridge root check', false);
+  if(lowCarryTransition){
+    add(a[1], 780 + Math.round(0.14*(digitMemory[a[1]] || 0)), 'Center bridge carry K sebagai pintu tengah', false);
+    add(a[2], 420 + Math.round(0.10*(digitMemory[a[2]] || 0)), 'Center bridge carry L ringan', false);
+    add(al, 360 + marketBoost(al), 'Center bridge A+L pembanding', false);
+    add(ae, 320 + marketBoost(ae), 'Center bridge A+E pembanding', false);
+  }
+  candidate.centerBridgeDigits = DIGITS.filter(d => candidate.centerBridgeScore[d] > 0).sort((x,y) => candidate.centerBridgeScore[y]-candidate.centerBridgeScore[x]);
+  candidate.centerBridgeTwinDigits = DIGITS.filter(d => candidate.centerBridgeTwinScore[d] > 0).sort((x,y) => candidate.centerBridgeTwinScore[y]-candidate.centerBridgeTwinScore[x]);
+  if(candidate.centerBridgeDigits.length){
+    candidate.centerBridgeAudit = {
+      title:`Center bridge aktif: K+L=${kl}, K+E=${ke}, A+K=${ak}`,
+      lowCarry: lowCarryTransition,
+      digits:candidate.centerBridgeDigits.slice(0,6).map(d => `${d}:${Math.round(candidate.centerBridgeScore[d])}`).join(' | '),
+      twin:candidate.centerBridgeTwinDigits.slice(0,4).map(d => `${d}${d}:${Math.round(candidate.centerBridgeTwinScore[d])}`).join(' | ') || '-'
+    };
+  }
+}
+
+function forceCenterBridgeRescue(selected, latest, candidate){
+  const a = latest?.digits || [];
+  const profile = candidate.marketProfile;
+  if(a.length < 4 || !candidate.centerBridgeDigits?.length) return;
+  const hardCap = Number(profile?.targetCarryHardCap || 4);
+  const lowCarry = Number(profile?.targetCarrySamples || profile?.total || 0) >= 5 && hardCap <= 2;
+  const kl = mod10(a[1]+a[2]);
+  const ke = mod10(a[1]+a[3]);
+  const ak = mod10(a[0]+a[1]);
+  const required = uniqueDigits(lowCarry ? [kl, ke, ak] : [kl, ke])
+    .filter(d => (candidate.centerBridgeScore?.[d] || 0) >= 600);
+  if(!required.length) return;
+  const latestSet = new Set(uniqueDigits(a));
+  const protectedSet = new Set(required.filter(d => selected.includes(d)).map(Number));
+  const traceWidth = d => new Set((candidate.digitTrace?.[d] || []).map(x => x.family)).size;
+  const bridgePower = d => (candidate.centerBridgeScore?.[d] || 0) + 0.20*(candidate.score?.[d] || 0) + 28*traceWidth(d);
+  const victimScore = d => {
+    let penalty = candidate.score?.[d] || 0;
+    if(latestSet.has(Number(d)) && !required.includes(Number(d))) penalty -= lowCarry ? 1150 : 420;
+    penalty += 0.12*((candidate.marketNonCarryScore || [])[d] || 0);
+    penalty += 0.08*((candidate.marketMemoryScore || [])[d] || 0);
+    return penalty;
+  };
+  required.sort((x,y) => bridgePower(y)-bridgePower(x)).forEach(d => {
+    if(selected.includes(d)){ protectedSet.add(Number(d)); return; }
+    const victim = selected.slice()
+      .filter(x => !protectedSet.has(Number(x)))
+      .sort((x,y) => victimScore(x) - victimScore(y) || (latestSet.has(Number(y))?1:0) - (latestSet.has(Number(x))?1:0))[0];
+    if(victim == null) return;
+    selected[selected.indexOf(victim)] = d;
+    protectedSet.add(Number(d));
+  });
+}
+
+function buildCenterBridgeAudit(audit){
+  if(!audit) return null;
+  return {title:audit.title + (audit.lowCarry ? ' • carry rendah' : ''), digits:audit.digits, twin:audit.twin};
+}
+
+
 function boundaryTailMirrorDigits(latest){
   const a = latest?.digits || [];
   if(a.length < 4) return [];
@@ -1563,8 +1734,10 @@ function buildTwinLabScores(candidate, finalDigits, latest){
     add(d, 0.38*((candidate.targetAnchorScore || [])[d] || 0), 'jangkar hari target');
     add(d, 0.52*((candidate.boundaryTailScore || [])[d] || 0), 'boundary-tail lab');
     add(d, 0.44*((candidate.marketMemoryScore || [])[d] || 0), 'market adaptive digit memory');
-    add(d, 0.70*((candidate.marketProfile?.twinScore || [])[d] || 0), 'market adaptive twin cycle');
-    add(d, 0.62*((candidate.marketProfile?.twinAfterNoTwinScore || [])[d] || 0), 'market twin-after-non-twin memory');
+    add(d, 0.32*((candidate.marketProfile?.twinScore || [])[d] || 0), 'market adaptive twin cycle');
+    add(d, 0.58*((candidate.centerBridgeScore || [])[d] || 0), 'center bridge formula');
+    add(d, 0.34*((candidate.centerBridgeTwinScore || [])[d] || 0), 'center bridge twin seed');
+    add(d, 0.24*((candidate.marketProfile?.twinAfterNoTwinScore || [])[d] || 0), 'market twin-after-non-twin memory');
     if((finalDigits || []).includes(d)) add(d, 360, 'masuk 6 digit formula');
   });
   if(a.length >= 4){
@@ -1591,6 +1764,9 @@ function buildTwinLabScores(candidate, finalDigits, latest){
       });
     }else{
       add(seedLE, 220, 'L+E non-kembar');
+      (candidate.centerBridgeTwinDigits || []).forEach((d,i) => add(d, Math.max(120, 390 - i*90), 'center bridge twin priority'));
+      // V5.6: center bridge tidak boleh mengunci kandidat kembar sendirian.
+      // Ia hanya menjadi pendukung, sedangkan gate kembar ditentukan oleh pola transisi dan operasi aktif.
       add(root, 520, 'root total non-kembar');
       add(mod10(9-root), 210, 'cermin root non-kembar');
       const ae = mod10(a[0] + a[3]);
@@ -1621,7 +1797,8 @@ function buildTwinLabAudit(twinAudit){
   if(!twinAudit || !twinAudit.ranked) return null;
   return {
     title: `Twin Lab memilih ${twinAudit.chosen}${twinAudit.chosen}${twinAudit.cooldown?.active ? ' (cooldown aktif)' : ''}`,
-    ranked: twinAudit.ranked.slice(0,5).map(x => `${x.digit}${x.digit}: ${Math.round(x.points)} poin (${x.reasons.slice(0,3).join(', ') || '-'})`)
+    ranked: twinAudit.ranked.slice(0,5).map(x => `${x.digit}${x.digit}: ${Math.round(x.points)} poin (${x.reasons.slice(0,3).join(', ') || '-'})`),
+    decision: twinAudit.decision || ''
   };
 }
 
@@ -1699,51 +1876,97 @@ function chooseTwinDigit(candidate, finalDigits, latest){
   const counts = countMap(a);
   const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
   const root = digitalRoot(sumDigits(latest));
-  const e = a[3];
+  const profile = candidate.twinCycleProfile || {};
+  const market = candidate.marketProfile || {};
+  const rankMap = {};
+  ranked.forEach((x,i) => rankMap[x.digit] = {...x, rank:i});
+  const score = Array(10).fill(0);
+  const reason = Array.from({length:10}, () => []);
+  const add = (d, amount, why) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9 || !Number.isFinite(amount)) return;
+    score[d] += amount;
+    if(why && reason[d].length < 6) reason[d].push(why);
+  };
+  DIGITS.forEach(d => {
+    add(d, 0.22*(rankMap[d]?.points || 0), 'twin lab score seimbang');
+    if(allowed.includes(d)) add(d, 180, 'masuk 6 digit formula');
+  });
+  const targetTwinDigits = Object.entries(profile.nextTwinDigits || {})
+    .map(([d,c]) => ({d:Number(d), c:Number(c)}))
+    .sort((x,y) => y.c - x.c || x.d - y.d);
+  targetTwinDigits.forEach((x,i) => add(x.d, 660 + 240*x.c - 90*i, 'riwayat twin transisi hari'));
+  DIGITS.slice().sort((x,y) => ((market.twinScore || [])[y] || 0)-((market.twinScore || [])[x] || 0)).slice(0,3)
+    .forEach((d,i) => add(d, 140 - 35*i, 'market twin memory ringan'));
 
-  let chosen;
-  if(!twins.length && (e === 9 || e === 0)){
-    // V5.0: pada non-kembar dengan ekor 9/0, kandidat kembar tidak boleh dikunci oleh L+E saja.
-    // Root dan pantulan ekor diberi hak memilih walaupun sebelumnya kalah oleh pair generik.
-    const priority = uniqueDigits([root, mod10(e-1), mod10(10-e), mod10(9-e), mod10(a[2]+a[3])]);
-    chosen = ranked
-      .filter(x => priority.includes(x.digit))
-      .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
-  }else if(twins.length){
-    const singles = a.filter(d => !twins.includes(d));
-    const singleSum = singles.length >= 2 ? mod10(singles.reduce((s,d) => s+d, 0)) : null;
-    const boundary = twins.find(t => t === 9 || t === 0);
-    const cooldown = !!candidate.twinCooldown?.active;
-    const splitDigits = twins.map(t => mod10(t+t));
-    const priority = cooldown
-      ? uniqueDigits([singleSum, ...splitDigits, ...(candidate.postTwinSpreadDigits || []), boundary, 0, ...twins].filter(x => x != null))
-      : uniqueDigits([boundary, singleSum, ...twins, ...splitDigits, 0].filter(x => x != null));
-    chosen = ranked
-      .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * (cooldown ? 0.66 : 0.82)))
-      .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
-  }else{
-    const ae = a.length >= 4 ? mod10(a[0] + a[3]) : null;
-    if(ae === 0){
-      // V5.2: saat A+E membentuk 0, Twin Lab penuh yang menentukan.
-      // Jangan dikunci lagi oleh L+E/root saja, karena kasus 6934 menunjukkan twin lahir dari A carry.
-      chosen = ranked
-        .filter(x => allowed.includes(x.digit) || x.points >= ranked[0].points * 0.62)
-        .sort((x,y) => y.points - x.points || x.digit-y.digit)[0]?.digit;
-    }else{
-      const seed = mod10(a[2]+a[3]);
-      const marketTwin = candidate.marketProfile?.twinAfterNoTwinScore || [];
-      const marketTop = DIGITS.slice().sort((x,y) => (marketTwin[y]||0)-(marketTwin[x]||0)).slice(0,3);
-      const priority = uniqueDigits([seed, root, mod10(9-root), ...marketTop]);
-      chosen = ranked
-        .filter(x => priority.includes(x.digit) && (allowed.includes(x.digit) || x.points >= ranked[0].points * 0.78))
-        .sort((x,y) => y.points - x.points || priority.indexOf(x.digit)-priority.indexOf(y.digit))[0]?.digit;
+  if(a.length >= 4){
+    const ae = mod10(a[0] + a[3]);
+    const kl = mod10(a[1] + a[2]);
+    const ke = mod10(a[1] + a[3]);
+    const le = mod10(a[2] + a[3]);
+    const ak = mod10(a[0] + a[1]);
+    const e = a[3];
+    add(root, 410, 'root total');
+    add(le, 250, 'L+E');
+    add(kl, 250, 'K+L');
+    add(ke, 220, 'K+E');
+    add(ae, 180, 'A+E');
+    add(ak, 150, 'A+K');
+
+    if(!twins.length && ae === 0){
+      add(a[0], 1500 + Math.round(820*(candidate.transitionProfile?.positionCarryRate?.[0] || 0)), 'A/E complement twin seed utama');
+      add(0, 120, 'zero bridge support, bukan otomatis 00');
+      add(a[3], 180, 'E complement support');
+    }
+    if(!twins.length && (e === 9 || e === 0)){
+      add(root, 760, 'root setelah ekor boundary');
+      add(mod10(e-1), 520, 'neighbor turun ekor boundary');
+      add(mod10(10-e), 440, 'mirror10 ekor boundary');
+      add(mod10(9-e), 320, 'mirror9 ekor boundary');
+    }
+    (candidate.centerBridgeTwinDigits || []).slice(0,2).forEach((d,i) => add(d, 160 - 50*i, 'center bridge hanya pendukung twin'));
+
+    if(twins.length){
+      const cooldown = !!candidate.twinCooldown?.active || (profile.marketSameTwinRepeatRate || 0) <= 0.12;
+      const singles = a.filter(d => !twins.includes(d));
+      const singleSum = singles.length >= 2 ? mod10(singles.reduce((s,d) => s+d, 0)) : null;
+      twins.forEach(t => {
+        add(mod10(t+t), cooldown ? 780 : 360, 'pecah twin t+t');
+        add(0, cooldown ? 220 : 150, 'twin t-t');
+        add(t, cooldown ? -2200 : 240, cooldown ? 'cooldown: kembar sama direm' : 'carry twin boleh');
+      });
+      if(singleSum != null) add(singleSum, 430, 'jumlah digit tunggal setelah twin');
+      (candidate.postTwinSpreadDigits || []).slice(0,4).forEach((d,i) => add(d, 390 - i*70, 'post-twin spread'));
     }
   }
-  if(chosen == null) chosen = ranked.find(x => allowed.includes(x.digit))?.digit ?? ranked[0]?.digit ?? 0;
-  candidate.twinAudit = {chosen, ranked, cooldown:candidate.twinCooldown};
+
+  // V5.6: root/riwayat transisi diberi hak rotasi agar kandidat tidak terkunci 66 terus.
+  let chosen = null;
+  const sorted = DIGITS.map(d => ({digit:d, points:score[d], reasons:reason[d]})).sort((x,y) => y.points-x.points || x.digit-y.digit);
+  if(a.length >= 4 && !twins.length){
+    const ae = mod10(a[0] + a[3]);
+    if(ae === 0){
+      chosen = a[0];
+    }else if(targetTwinDigits.some(x => x.d === root)){
+      // Jika root pernah menjadi kandidat transisi, pakai root untuk memecah dominasi marketTop yang berulang.
+      chosen = root;
+    }
+  }
+  if(chosen == null && twins.length){
+    const cooldown = !!candidate.twinCooldown?.active || (profile.marketSameTwinRepeatRate || 0) <= 0.12;
+    if(cooldown){
+      chosen = sorted.find(x => !twins.includes(x.digit) && (allowed.includes(x.digit) || x.points >= sorted[0].points*0.58))?.digit;
+    }
+  }
+  if(chosen == null) chosen = sorted.find(x => allowed.includes(x.digit))?.digit ?? sorted[0]?.digit ?? 0;
+  candidate.twinAudit = {
+    chosen,
+    ranked: sorted.map(x => ({digit:x.digit, points:x.points, reasons:x.reasons})),
+    cooldown:candidate.twinCooldown,
+    decision:'V5.6 twin gate: operasi aktif + riwayat transisi + rem dominasi kembar sama'
+  };
   return chosen;
 }
-
 
 
 function buildAKLEPrediction(rows, candidate, formulas, targetAnchor){
@@ -1789,6 +2012,8 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(transitionCarryPairSeeds(latest, candidate, kind), 0, 'transition carry lock');
   pushSeeds(postTwinSpreadPairSeeds(latest, candidate, targetAnchor, kind), 0, 'post-twin spread lock');
   pushSeeds(marketAdaptivePairSeeds(latest, candidate, kind), 0, 'market adaptive memory');
+  pushSeeds(akleFlowPairSeeds(latest, candidate, kind), 0, 'AKLE flow gate');
+  pushSeeds(centerBridgePairSeeds(latest, candidate, kind), 0, 'center bridge formula');
 
   // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
   if(targetAnchor && (targetAnchor.digits || []).length >= 4){
@@ -1880,7 +2105,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   const ranked = Object.values(scored)
     .sort((a,b) => b.points - a.points || a.pair.localeCompare(b.pair));
   const positionLocked = applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate);
-  return applyAKLETransitionLock(positionLocked, kind, latest, candidate).slice(0,5);
+  return applyCenterBridgePairLock(applyAKLETransitionLock(positionLocked, kind, latest, candidate), kind, latest, candidate).slice(0,5);
 }
 
 
@@ -1982,6 +2207,34 @@ function applyAKLETransitionLock(ranked, kind, latest, candidate){
   return Object.values(map).sort((x,y) => y.points - x.points || x.pair.localeCompare(y.pair));
 }
 
+
+function applyCenterBridgePairLock(ranked, kind, latest, candidate){
+  const a = latest?.digits || [];
+  const profile = candidate?.marketProfile;
+  if(a.length < 4 || !profile) return ranked;
+  const lowCarry = Number(profile.targetCarrySamples || profile.total || 0) >= 5 && Number(profile.targetCarryHardCap || 4) <= 2;
+  if(!lowCarry) return ranked;
+  const kl = mod10(a[1]+a[2]);
+  const ke = mod10(a[1]+a[3]);
+  const ak = mod10(a[0]+a[1]);
+  const map = {};
+  ranked.forEach(x => map[x.pair] = {...x, notes:[...(x.notes || [])]});
+  const ensure = (pair, points, note) => {
+    if(!/^\d{2}$/.test(pair)) return;
+    if(!map[pair]) map[pair] = {pair, points:0, notes:[]};
+    map[pair].points = Math.max(map[pair].points, points);
+    if(note && !map[pair].notes.includes(note)) map[pair].notes.unshift(note);
+  };
+  if(kind === 'AK'){
+    ensure(`${kl}${a[1]}`, 17400 + 0.04*((candidate.centerBridgeScore || [])[kl] || 0), 'AK center bridge lock');
+    ensure(`${kl}${ak}`, 10800 + 0.03*((candidate.centerBridgeScore || [])[ak] || 0), 'AK center bridge lock');
+  }else{
+    ensure(`${kl}${ke}`, 42800 + 0.04*((candidate.centerBridgeScore || [])[kl] || 0) + 0.04*((candidate.centerBridgeScore || [])[ke] || 0), 'LE center bridge lock');
+    ensure(`${kl}${a[3]}`, 9200 + 0.03*((candidate.centerBridgeScore || [])[kl] || 0), 'LE center bridge lock');
+  }
+  return Object.values(map).sort((x,y) => y.points - x.points || x.pair.localeCompare(y.pair));
+}
+
 function applyAKLEPositionLock(ranked, kind, latest, targetAnchor, candidate){
   if(!targetAnchor || !(targetAnchor.digits || []).length || !(latest.digits || []).length) return ranked;
   const ad = targetAnchor.digits;
@@ -2031,6 +2284,8 @@ function orderedPairSeeds(row, formulas, kind){
     add(pair(mod10(a[0]+a[3]), mod10(a[1]+a[2])), 'AK sudut-tengah', 34);
     add(pair(mod10(a[0]+root), mod10(a[1]+dayKey)), 'AK root-hari', 30);
     add(pair(mod10(a[0]+6), mod10(a[1]+4)), 'AK golden 6/4', 28);
+    add(pair(a[3], mod10(a[1]+a[3])), 'AK flow E + K+E', 52);
+    add(pair(a[3], mod10(a[1]+a[2])), 'AK flow E + K+L', 40);
   }else{
     add(pair(a[2],a[3]), 'carry LE', 44);
     add(pair(mod10(9-a[2]), mod10(10-a[3])), 'mirror LE', 38);
@@ -2038,6 +2293,8 @@ function orderedPairSeeds(row, formulas, kind){
     add(pair(mod10(a[1]+a[2]), mod10(a[0]+a[3])), 'LE tengah-sudut', 36);
     add(pair(mod10(a[2]+root), mod10(a[3]+dayKey)), 'LE root-hari', 30);
     add(pair(mod10(a[2]+6), mod10(a[3]+4)), 'LE golden 6/4', 28);
+    add(pair(a[1], mod10(10-a[3])), 'LE flow K + mirror10 E', 54);
+    add(pair(a[1], mod10(9-a[3])), 'LE flow K + mirror9 E', 38);
   }
 
   const gate = singlePairGateDigits(row);
@@ -2211,6 +2468,7 @@ function renderResult(r){
   const twinLabHtml = r.audit.twinLab ? `<div><b>Twin Lab</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinLab.title)}</li>${r.audit.twinLab.ranked.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const twinCycleHtml = r.audit.twinCycle ? `<div><b>Twin cycle history</b><ul class="process-list small"><li>${escapeHtml(r.audit.twinCycle.title)}</li><li>Latest twin: ${escapeHtml(r.audit.twinCycle.latestTwins)}</li><li>Repeat sama: ${escapeHtml(r.audit.twinCycle.sameRepeat)}</li><li>Twin berikutnya: ${escapeHtml(r.audit.twinCycle.nextTwin)}</li><li>Digit twin historis: ${escapeHtml(r.audit.twinCycle.nextTwinDigits)}</li><li>Status: ${escapeHtml(r.audit.twinCycle.cooldown)}</li></ul></div>` : '';
   const complementHtml = r.audit.complementBridge ? `<div><b>Complement bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.complementBridge.title)}</li><li>${escapeHtml(r.audit.complementBridge.digits)}</li></ul></div>` : '';
+  const centerBridgeHtml = r.audit.centerBridge ? `<div><b>Center bridge formula</b><ul class="process-list small"><li>${escapeHtml(r.audit.centerBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.centerBridge.digits)}</li><li>Twin: ${escapeHtml(r.audit.centerBridge.twin)}</li></ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
     <div class="audit-columns">
@@ -2219,6 +2477,10 @@ function renderResult(r){
       ${anchorHtml}
       ${transitionHtml}
       ${twinLabHtml}
+      ${twinCycleHtml}
+      ${complementHtml}
+      ${centerBridgeHtml}
+      ${marketHtml}
       <div><b>Operasi latest</b><ul class="process-list small">${r.audit.process.latestOps.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>
     </div>
   </div>` : '';
@@ -2228,7 +2490,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V5.2 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, post-twin adaptive spread, complement zero bridge, AK K+A lock, dan LE zero+A lock.</p>
+      <p class="tagline">Engine V5.6 membaca pelan operasi tambah, kurang, kali, bagi bulat, tetangga cincin, cermin 9/10, root, sudut-tengah, golden shift, Fibonacci shift, affine modular, rumus hari, kembar menyebar, jangkar hari target, carry anchor, hidden anchor, single-mirror, AKLE berurutan, twin dari 6 digit utama, parser date-first, schedule-aware target day, transition carry lock, boundary-tail mirror cluster, twin lab root lock, twin cooldown history, post-twin adaptive spread, complement zero bridge, AK K+A lock, LE zero+A lock, center bridge K+L/K+E, market carry brake, dan center-bridge twin audit.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
