@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V6.7 • Decision Engine + Dynamic Pivot Ensemble';
+const APP_VERSION = 'IPHOEL Formula Engine V6.8 • Decision Engine + Dynamic Twin-Gate Ensemble';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -163,6 +163,7 @@ function buildFormulaPrediction(inputRows){
   applyTargetExitMirrorBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetTailPivotBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetCenterPivotBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
+  applyTargetTwinGateEnsembleBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   const replayProfile = buildWorldFormulaReplayProfile(rows, targetDay);
   candidate.replayProfile = replayProfile;
   applyWorldFormulaReplay(candidate, latest, replayProfile);
@@ -188,6 +189,7 @@ function buildFormulaPrediction(inputRows){
   audit.targetExitMirrorBridge = buildTargetExitMirrorBridgeAudit(candidate.targetExitMirrorBridgeAudit);
   audit.targetTailPivotBridge = buildTargetTailPivotBridgeAudit(candidate.targetTailPivotBridgeAudit);
   audit.targetCenterPivotBridge = buildTargetCenterPivotBridgeAudit(candidate.targetCenterPivotBridgeAudit);
+  audit.targetTwinGateEnsembleBridge = buildTargetTwinGateEnsembleBridgeAudit(candidate.targetTwinGateEnsembleBridgeAudit);
   audit.decisionEngine = buildDecisionEngineAudit(candidate.decisionEngine);
   audit.worldReplay = buildWorldFormulaReplayAudit(replayProfile, candidate);
   audit.process = buildProcessCards(rows, formulas);
@@ -2893,6 +2895,99 @@ function buildTargetCenterPivotBridgeAudit(audit){
   return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le};
 }
 
+
+// V6.8: Target Twin-Gate Ensemble Bridge
+// Prinsipnya tetap Decision Engine: modul ini hanya menyumbang skor kandidat.
+// Ia aktif bila latest memiliki twin belakang (L=E) dan anchor hari target memiliki twin depan (A=K)
+// atau gate depan yang kuat. Formula diturunkan dari posisi, bukan dari angka tertentu:
+// AK = (K+L latest) + |E anchor - twin belakang latest|
+// LE = (A+K anchor) + (K+E anchor)
+function targetTwinGateEnsembleBridgeContext(latest, targetAnchor, transitionProfile, marketProfile){
+  const ld = latest?.digits || [];
+  const ad = targetAnchor?.digits || [];
+  if(ld.length < 4 || ad.length < 4) return null;
+  const transitionSamples = Number(transitionProfile?.total || marketProfile?.total || 0);
+  if(transitionSamples < 4) return null;
+  const latestBackTwin = ld[2] === ld[3];
+  const latestFrontTwin = ld[0] === ld[1];
+  const anchorFrontTwin = ad[0] === ad[1];
+  const anchorBackTwin = ad[2] === ad[3];
+  // Syaratnya bentuk twin/gate harus datang dari data, bukan dari market tertentu.
+  if(!((latestBackTwin && anchorFrontTwin) || (latestFrontTwin && anchorBackTwin))) return null;
+  const latestTwin = latestBackTwin ? ld[2] : ld[0];
+  const anchorTwin = anchorFrontTwin ? ad[0] : ad[2];
+  const latestCenterSum = mod10(ld[1] + ld[2]);
+  const latestEdgeSum = mod10(ld[0] + ld[3]);
+  const anchorFrontSum = mod10(ad[0] + ad[1]);
+  const anchorBackSum = mod10(ad[2] + ad[3]);
+  const anchorKE = mod10(ad[1] + ad[3]);
+  const anchorLE = mod10(ad[2] + ad[3]);
+  const anchorETwinDiff = Math.abs(ad[3] - latestTwin) % 10;
+  const anchorATwinDiff = Math.abs(ad[0] - latestTwin) % 10;
+  const anchorRoot = digitalRoot(sumDigits(targetAnchor));
+  const latestRoot = digitalRoot(sumDigits(latest));
+  const akA = latestBackTwin ? latestCenterSum : latestEdgeSum;
+  const akK = latestBackTwin ? anchorETwinDiff : anchorATwinDiff;
+  const leL = latestBackTwin ? anchorFrontSum : anchorBackSum;
+  const leE = latestBackTwin ? anchorKE : anchorLE;
+  const core = uniqueDigits([akA, akK, leL, leE, latestTwin, anchorTwin, anchorRoot, latestRoot]);
+  return {ld, ad, transitionSamples, latestBackTwin, latestFrontTwin, anchorFrontTwin, anchorBackTwin, latestTwin, anchorTwin, latestCenterSum, latestEdgeSum, anchorFrontSum, anchorBackSum, anchorKE, anchorLE, anchorETwinDiff, anchorATwinDiff, anchorRoot, latestRoot, akA, akK, leL, leE, core};
+}
+
+function applyTargetTwinGateEnsembleBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile){
+  candidate.targetTwinGateEnsembleBridgeScore = Array(10).fill(0);
+  candidate.targetTwinGateEnsembleBridgeDigits = [];
+  candidate.targetTwinGateEnsembleBridgeAudit = null;
+  const ctx = targetTwinGateEnsembleBridgeContext(latest, targetAnchor, transitionProfile, marketProfile);
+  if(!ctx) return;
+  const add = (d, amount, note) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.targetTwinGateEnsembleBridgeScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, note, 'targetTwinGateEnsembleBridge');
+  };
+  const sampleBoost = Math.min(1900, 170 * Math.max(0, ctx.transitionSamples - 4));
+  add(ctx.akA, 37200 + sampleBoost, 'Target twin-gate ensemble: AK pembuka dari sum posisi latest');
+  add(ctx.akK, 38400 + sampleBoost, 'Target twin-gate ensemble: AK pengunci dari diff anchor-twin');
+  add(ctx.leL, 36800 + sampleBoost, 'Target twin-gate ensemble: LE pembuka dari sum twin anchor');
+  add(ctx.leE, 37800 + sampleBoost, 'Target twin-gate ensemble: LE ekor dari gate anchor');
+  add(ctx.latestTwin, 4600, 'Target twin-gate ensemble: twin latest support');
+  add(ctx.anchorTwin, 4200, 'Target twin-gate ensemble: twin anchor support');
+  add(ctx.anchorRoot, 2600, 'Target twin-gate ensemble: root anchor support');
+  add(ctx.latestRoot, 2200, 'Target twin-gate ensemble: root latest support');
+  candidate.targetTwinGateEnsembleBridgeDigits = ctx.core
+    .filter(d => (candidate.targetTwinGateEnsembleBridgeScore[d] || 0) > 0)
+    .sort((x,y) => (candidate.targetTwinGateEnsembleBridgeScore[y] || 0) - (candidate.targetTwinGateEnsembleBridgeScore[x] || 0));
+  candidate.targetTwinGateEnsembleBridgeAudit = {
+    title:`Target twin-gate ensemble aktif: latest ${ctx.ld.join('')} + anchor ${ctx.ad.join('')}`,
+    digits:candidate.targetTwinGateEnsembleBridgeDigits.map(d => `${d}:${Math.round(candidate.targetTwinGateEnsembleBridgeScore[d] || 0)}`).join(' | '),
+    ak:`${ctx.akA}${ctx.akK}`,
+    le:`${ctx.leL}${ctx.leE}`
+  };
+}
+
+function targetTwinGateEnsembleBridgePairSeeds(latest, targetAnchor, candidate, kind){
+  const ctx = targetTwinGateEnsembleBridgeContext(latest, targetAnchor, candidate?.transitionProfile, candidate?.marketProfile);
+  if(!ctx) return [];
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+  if(kind === 'AK'){
+    add(`${ctx.akA}${ctx.akK}`, 456000, 'AK target twin-gate ensemble: sum latest + diff anchor-twin');
+    add(`${ctx.akA}${ctx.leL}`, 136000, 'AK target twin-gate ensemble: sum latest + sum anchor twin');
+    add(`${ctx.latestTwin}${ctx.akK}`, 98000, 'AK target twin-gate ensemble: twin latest + diff anchor-twin');
+  }else{
+    add(`${ctx.leL}${ctx.leE}`, 462000, 'LE target twin-gate ensemble: sum twin anchor + gate anchor');
+    add(`${ctx.leL}${ctx.akK}`, 128000, 'LE target twin-gate ensemble: sum twin anchor + diff anchor-twin');
+    add(`${ctx.akK}${ctx.leE}`, 112000, 'LE target twin-gate ensemble: diff anchor-twin + gate anchor');
+  }
+  return seeds;
+}
+
+function buildTargetTwinGateEnsembleBridgeAudit(audit){
+  if(!audit) return null;
+  return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le};
+}
+
 function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const score = Array(10).fill(0);
   const reasons = Array.from({length:10}, () => []);
@@ -2923,6 +3018,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     ['targetExitMirrorBridgeScore', 1.10, 'target exit-mirror bridge'],
     ['targetTailPivotBridgeScore', 1.16, 'target tail-pivot bridge'],
     ['targetCenterPivotBridgeScore', 1.18, 'target center-pivot bridge'],
+    ['targetTwinGateEnsembleBridgeScore', 1.22, 'target twin-gate ensemble bridge'],
     ['centerBridgeScore', 0.16, 'center bridge'],
     ['boundaryTailScore', 0.14, 'boundary-tail'],
     ['postTwinSpreadScore', 0.16, 'post-twin spread'],
@@ -2963,7 +3059,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     selected:selected.slice(),
     score,
     ranked,
-    note:'V6.7 memilih langsung dari skor total semua digit. Tidak ada forceXXXRescue setelah pemilihan.'
+    note:'V6.8 memilih langsung dari skor total semua digit. Tidak ada forceXXXRescue setelah pemilihan.'
   };
   return selected;
 }
@@ -2971,7 +3067,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V6.7: nilai semua digit → bandingkan → pilih 6',
+    title:'Decision Engine V6.8: nilai semua digit → bandingkan → pilih 6',
     selected:(audit.selected || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
     note:audit.note || ''
@@ -3791,6 +3887,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(targetExitMirrorBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target exit-mirror bridge');
   pushSeeds(targetTailPivotBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target tail-pivot bridge');
   pushSeeds(targetCenterPivotBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target center-pivot bridge');
+  pushSeeds(targetTwinGateEnsembleBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target twin-gate ensemble bridge');
   pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
   // V4.6: anchor K/E dan LE cermin-zero ditambahkan agar digit tengah tidak hilang.
@@ -4259,6 +4356,7 @@ function renderResult(r){
   const targetExitMirrorBridgeHtml = r.audit.targetExitMirrorBridge ? `<div><b>Target exit-mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetExitMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetExitMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetExitMirrorBridge.ak)}</li><li>LE: ${escapeHtml(r.audit.targetExitMirrorBridge.le)}</li></ul></div>` : '';
   const targetTailPivotBridgeHtml = r.audit.targetTailPivotBridge ? `<div><b>Target tail-pivot bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetTailPivotBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetTailPivotBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetTailPivotBridge.ak)}</li><li>LE: ${escapeHtml(r.audit.targetTailPivotBridge.le)}</li></ul></div>` : '';
   const targetCenterPivotBridgeHtml = r.audit.targetCenterPivotBridge ? `<div><b>Target center-pivot bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetCenterPivotBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetCenterPivotBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetCenterPivotBridge.ak)}</li><li>LE: ${escapeHtml(r.audit.targetCenterPivotBridge.le)}</li></ul></div>` : '';
+  const targetTwinGateEnsembleBridgeHtml = r.audit.targetTwinGateEnsembleBridge ? `<div><b>Target twin-gate ensemble</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetTwinGateEnsembleBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetTwinGateEnsembleBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetTwinGateEnsembleBridge.ak)}</li><li>LE: ${escapeHtml(r.audit.targetTwinGateEnsembleBridge.le)}</li></ul></div>` : '';
   const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih: ${escapeHtml(r.audit.decisionEngine.selected)}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
@@ -4282,6 +4380,7 @@ function renderResult(r){
       ${targetExitMirrorBridgeHtml}
       ${targetTailPivotBridgeHtml}
       ${targetCenterPivotBridgeHtml}
+      ${targetTwinGateEnsembleBridgeHtml}
       ${decisionEngineHtml}
       ${worldReplayHtml}
       ${marketHtml}
@@ -4294,7 +4393,7 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V6.7 memakai Decision Engine: semua digit dinilai lebih dulu, dibandingkan, lalu 6 digit dipilih langsung. Modul lama tidak lagi menjalankan forceXXXRescue berlapis setelah pemilihan; AKLE, anchor, market, twin, replay, dan bridge hanya menjadi sumber skor keputusan.</p>
+      <p class="tagline">Engine V6.8 memakai Decision Engine: semua digit dinilai lebih dulu, dibandingkan, lalu 6 digit dipilih langsung. Modul lama tidak lagi menjalankan forceXXXRescue berlapis setelah pemilihan; AKLE, anchor, market, twin, replay, dan bridge hanya menjadi sumber skor keputusan.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
