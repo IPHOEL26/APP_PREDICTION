@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V7.1 • Decision Engine + Front-Sum Anchor-Mirror Bridge';
+const APP_VERSION = 'IPHOEL Formula Engine V7.2 • Decision Engine + Zero-Anchor Descent-Mirror Bridge';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -166,6 +166,7 @@ function buildFormulaPrediction(inputRows){
   applyTargetZeroCenterAnchorComplementBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetFrontMirrorTailReverseBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetFrontSumAnchorMirrorBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
+  applyTargetZeroAnchorDescentMirrorBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetFrontCarryAnchorTwinBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   const replayProfile = buildWorldFormulaReplayProfile(rows, targetDay);
   candidate.replayProfile = replayProfile;
@@ -196,6 +197,7 @@ function buildFormulaPrediction(inputRows){
   audit.targetZeroCenterAnchorComplementBridge = buildTargetZeroCenterAnchorComplementBridgeAudit(candidate.targetZeroCenterAnchorComplementBridgeAudit);
   audit.targetFrontMirrorTailReverseBridge = buildTargetFrontMirrorTailReverseBridgeAudit(candidate.targetFrontMirrorTailReverseBridgeAudit);
   audit.targetFrontSumAnchorMirrorBridge = buildTargetFrontSumAnchorMirrorBridgeAudit(candidate.targetFrontSumAnchorMirrorBridgeAudit);
+  audit.targetZeroAnchorDescentMirrorBridge = buildTargetZeroAnchorDescentMirrorBridgeAudit(candidate.targetZeroAnchorDescentMirrorBridgeAudit);
   audit.targetFrontCarryAnchorTwinBridge = buildTargetFrontCarryAnchorTwinBridgeAudit(candidate.targetFrontCarryAnchorTwinBridgeAudit);
   audit.decisionEngine = buildDecisionEngineAudit(candidate.decisionEngine);
   audit.worldReplay = buildWorldFormulaReplayAudit(replayProfile, candidate);
@@ -3229,6 +3231,119 @@ function buildTargetFrontSumAnchorMirrorBridgeAudit(audit){
 }
 
 
+// V7.2: Target Zero-Anchor Descent-Mirror Bridge
+// Prinsip Decision Engine: bridge ini tidak mengganti mesin lama. Ia hanya menambahkan bukti posisi
+// saat anchor hari target memiliki A=0 dan E anchor menyatu dengan K latest.
+// Blind spot V7.1 pada SYD 7683 + anchor Senin 0376:
+// - V7.1 sudah menangkap 0/6, tetapi 5 dan 2 kalah tipis di luar 6 digit.
+// - Jalur yang hilang: AK = K latest turun 1 | mirror9 A latest, LE = zero anchor | E anchor.
+// Contoh: latest 7683 + anchor 0376 membuka AK 52 dan LE 06.
+function targetZeroAnchorDescentMirrorBridgeContext(latest, targetAnchor, transitionProfile, marketProfile){
+  const ld = latest?.digits || [];
+  const ad = targetAnchor?.digits || [];
+  if(ld.length < 4 || ad.length < 4) return null;
+  const transitionSamples = Number(transitionProfile?.total || marketProfile?.total || 0);
+  if(transitionSamples < 4) return null;
+  // Gerbang dibuat ketat agar tidak mengganggu bridge lain:
+  // latest harus non-kembar, anchor target harus zero-front, anchor E harus sama dengan K latest,
+  // dan anchor L harus mengikat A latest sebagai validasi rotasi anchor.
+  if(twinInfo(latest).twins.length) return null;
+  if(ad[0] !== 0) return null;
+  if(ad[3] !== ld[1]) return null;
+  if(ad[2] !== ld[0]) return null;
+
+  const akA = mod10(ld[1] - 1);
+  const akK = mod10(9 - ld[0]);
+  const akKAlt = mod10(ad[1] - 1);
+  const leL = ad[0];
+  const leE = ad[3];
+  const mirror10A = mod10(10 - ld[0]);
+  const latestE = ld[3];
+  const anchorK = ad[1];
+  const anchorL = ad[2];
+  const frontDiff = Math.abs(ld[0] - ld[1]) % 10;
+  const anchorMid = mod10(ad[1] + ad[2]);
+  const rootLatest = digitalRoot(sumDigits(latest));
+  const rootAnchor = digitalRoot(sumDigits(targetAnchor));
+  const hardCap = Number(marketProfile?.targetCarryHardCap || 4);
+  const lowCarry = Number(marketProfile?.targetCarrySamples || marketProfile?.total || 0) >= 5 && hardCap <= 2;
+  const core = uniqueDigits([akA, akK, leL, leE, akKAlt, mirror10A, latestE, anchorK, anchorL, frontDiff, anchorMid, rootLatest, rootAnchor]);
+  return {
+    ld, ad, transitionSamples, hardCap, lowCarry,
+    akA, akK, akKAlt, leL, leE, mirror10A, latestE, anchorK, anchorL,
+    frontDiff, anchorMid, rootLatest, rootAnchor,
+    ak:`${akA}${akK}`,
+    le:`${leL}${leE}`,
+    altAK:`${akA}${akKAlt}`,
+    altLE:`${akK}${leE}`,
+    core
+  };
+}
+
+function applyTargetZeroAnchorDescentMirrorBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile){
+  candidate.targetZeroAnchorDescentMirrorBridgeScore = Array(10).fill(0);
+  candidate.targetZeroAnchorDescentMirrorBridgeDigits = [];
+  candidate.targetZeroAnchorDescentMirrorBridgeAudit = null;
+  const ctx = targetZeroAnchorDescentMirrorBridgeContext(latest, targetAnchor, transitionProfile, marketProfile);
+  if(!ctx) return;
+  const add = (d, amount, note) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.targetZeroAnchorDescentMirrorBridgeScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, note, 'targetZeroAnchorDescentMirrorBridge');
+  };
+  const sampleBoost = Math.min(2600, 220 * Math.max(0, ctx.transitionSamples - 4));
+  const base = ctx.lowCarry ? 65400 : 59400;
+  add(ctx.akA, base + 24800 + sampleBoost, 'Target zero-anchor descent-mirror: K latest -1 sebagai A');
+  add(ctx.akK, base + 23800 + sampleBoost, 'Target zero-anchor descent-mirror: mirror9 A latest sebagai K');
+  add(ctx.leL, base + 12600 + sampleBoost, 'Target zero-anchor descent-mirror: zero anchor sebagai L');
+  add(ctx.leE, base + 11800 + sampleBoost, 'Target zero-anchor descent-mirror: E anchor / carry K sebagai E');
+  // Support ringan: cukup menjadi bukti konteks, bukan mengambil alih empat digit inti.
+  add(ctx.akKAlt, 8200, 'Target zero-anchor descent-mirror: anchor K -1 support');
+  add(ctx.mirror10A, 5200, 'Target zero-anchor descent-mirror: mirror10 A support');
+  add(ctx.latestE, 3600, 'Target zero-anchor descent-mirror: latest E context');
+  add(ctx.anchorL, 3000, 'Target zero-anchor descent-mirror: anchor L mengikat A latest');
+  add(ctx.frontDiff, 2600, 'Target zero-anchor descent-mirror: diff A-K support');
+  add(ctx.anchorMid, 2200, 'Target zero-anchor descent-mirror: anchor K+L support');
+  add(ctx.rootLatest, 1800, 'Target zero-anchor descent-mirror: root latest context');
+  add(ctx.rootAnchor, 1600, 'Target zero-anchor descent-mirror: root anchor context');
+  candidate.targetZeroAnchorDescentMirrorBridgeDigits = ctx.core
+    .filter(d => (candidate.targetZeroAnchorDescentMirrorBridgeScore[d] || 0) > 0)
+    .sort((x,y) => (candidate.targetZeroAnchorDescentMirrorBridgeScore[y] || 0) - (candidate.targetZeroAnchorDescentMirrorBridgeScore[x] || 0));
+  candidate.targetZeroAnchorDescentMirrorBridgeAudit = {
+    title:`Target zero-anchor descent-mirror bridge aktif: latest ${ctx.ld.join('')} + anchor ${ctx.ad.join('')}`,
+    digits:candidate.targetZeroAnchorDescentMirrorBridgeDigits.map(d => `${d}:${Math.round(candidate.targetZeroAnchorDescentMirrorBridgeScore[d] || 0)}`).join(' | '),
+    ak:ctx.ak,
+    le:ctx.le,
+    altAK:ctx.altAK,
+    altLE:ctx.altLE
+  };
+}
+
+function targetZeroAnchorDescentMirrorBridgePairSeeds(latest, targetAnchor, candidate, kind){
+  const ctx = targetZeroAnchorDescentMirrorBridgeContext(latest, targetAnchor, candidate?.transitionProfile, candidate?.marketProfile);
+  if(!ctx) return [];
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+  const base = ctx.lowCarry ? 980000 : 880000;
+  if(kind === 'AK'){
+    add(ctx.ak, base + 560000, 'AK target zero-anchor descent-mirror: K latest -1 + mirror9 A');
+    add(ctx.altAK, Math.round(base*0.46), 'AK target zero-anchor descent-mirror: K latest -1 + anchor K-1 support');
+    add(`${ctx.akA}${ctx.leE}`, Math.round(base*0.34), 'AK target zero-anchor descent-mirror: K latest -1 + E anchor support');
+  }else{
+    add(ctx.le, base + 580000, 'LE target zero-anchor descent-mirror: zero anchor + E anchor');
+    add(ctx.altLE, Math.round(base*0.42), 'LE target zero-anchor descent-mirror: mirror9 A + E anchor support');
+    add(`${ctx.leL}${ctx.akA}`, Math.round(base*0.32), 'LE target zero-anchor descent-mirror: zero anchor + K-1 support');
+  }
+  return seeds;
+}
+
+function buildTargetZeroAnchorDescentMirrorBridgeAudit(audit){
+  if(!audit) return null;
+  return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le, altAK:audit.altAK, altLE:audit.altLE};
+}
+
+
 // V6.8: Target Front-Carry Anchor-Twin Bridge
 // Prinsip Decision Engine: tidak menghapus rumus lama dan tidak menjalankan rescue setelah final.
 // Blind spot V6.7 pada HKG 3951 + anchor Sabtu 2066:
@@ -3365,6 +3480,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     ['targetFrontCarryAnchorTwinBridgeScore', 1.18, 'target front-carry anchor-twin bridge'],
     ['targetFrontMirrorTailReverseBridgeScore', 1.20, 'target front-mirror tail-reversal bridge'],
     ['targetFrontSumAnchorMirrorBridgeScore', 1.22, 'target front-sum anchor-mirror bridge'],
+    ['targetZeroAnchorDescentMirrorBridgeScore', 1.24, 'target zero-anchor descent-mirror bridge'],
     ['centerBridgeScore', 0.16, 'center bridge'],
     ['boundaryTailScore', 0.14, 'boundary-tail'],
     ['postTwinSpreadScore', 0.16, 'post-twin spread'],
@@ -3405,7 +3521,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     selected:selected.slice(),
     score,
     ranked,
-    note:'V7.1 memilih langsung dari skor total semua digit. Tidak ada forceXXXRescue setelah pemilihan; front-carry anchor-twin, zero-center anchor-complement, front-mirror tail-reversal, dan front-sum anchor-mirror bridge hanya menjadi sumber skor keputusan.'
+    note:'V7.2 memilih langsung dari skor total semua digit. Tidak ada forceXXXRescue setelah pemilihan; bridge baru zero-anchor descent-mirror ikut sebagai sumber skor keputusan.'
   };
   return selected;
 }
@@ -3429,7 +3545,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V7.1: nilai semua digit → bandingkan → pilih 6 + pilih 5 terkuat',
+    title:'Decision Engine V7.2: nilai semua digit → bandingkan → pilih 6 + pilih 5 terkuat',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -4253,6 +4369,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(targetZeroCenterAnchorComplementBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target zero-center anchor-complement bridge');
   pushSeeds(targetFrontMirrorTailReverseBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target front-mirror tail-reversal bridge');
   pushSeeds(targetFrontSumAnchorMirrorBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target front-sum anchor-mirror bridge');
+  pushSeeds(targetZeroAnchorDescentMirrorBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target zero-anchor descent-mirror bridge');
   pushSeeds(targetFrontCarryAnchorTwinBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target front-carry anchor-twin bridge');
   pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
@@ -4687,7 +4804,7 @@ function inferTargetDay(rows){
 
 function renderResult(r){
   const digitsHtml = r.finalDigits.map((d,i) => `<div class="digit">${d}<small>F${i+1}</small></div>`).join('');
-  const fiveDigitsHtml = (r.strongFiveDigits || []).map((d,i) => `<div class="digit strong-five">${d}<small>5F${i+1}</small></div>`).join('');
+  const fiveDigitsHtml = (r.strongFiveDigits || []).map(d => `<div class="digit strong-five">${d}</div>`).join('');
   const statsHtml = `<div class="stats">
     <div class="stat"><div class="k">Data</div><div class="v">${r.rows.length}</div></div>
     <div class="stat"><div class="k">Latest</div><div class="v">${escapeHtml(r.latest.digits.join(''))}</div></div>
@@ -4726,6 +4843,7 @@ function renderResult(r){
   const targetZeroCenterAnchorComplementBridgeHtml = r.audit.targetZeroCenterAnchorComplementBridge ? `<div><b>Target zero-center anchor-complement bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetZeroCenterAnchorComplementBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetZeroCenterAnchorComplementBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetZeroCenterAnchorComplementBridge.ak)}${r.audit.targetZeroCenterAnchorComplementBridge.altAK ? ' / '+escapeHtml(r.audit.targetZeroCenterAnchorComplementBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetZeroCenterAnchorComplementBridge.le)}${r.audit.targetZeroCenterAnchorComplementBridge.altLE ? ' / '+escapeHtml(r.audit.targetZeroCenterAnchorComplementBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontMirrorTailReverseBridgeHtml = r.audit.targetFrontMirrorTailReverseBridge ? `<div><b>Target front-mirror tail-reversal bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontMirrorTailReverseBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontMirrorTailReverseBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontMirrorTailReverseBridge.ak)}${r.audit.targetFrontMirrorTailReverseBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontMirrorTailReverseBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontMirrorTailReverseBridge.le)}${r.audit.targetFrontMirrorTailReverseBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontMirrorTailReverseBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontSumAnchorMirrorBridgeHtml = r.audit.targetFrontSumAnchorMirrorBridge ? `<div><b>Target front-sum anchor-mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontSumAnchorMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontSumAnchorMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontSumAnchorMirrorBridge.ak)}${r.audit.targetFrontSumAnchorMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontSumAnchorMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontSumAnchorMirrorBridge.le)}${r.audit.targetFrontSumAnchorMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontSumAnchorMirrorBridge.altLE) : ''}</li></ul></div>` : '';
+  const targetZeroAnchorDescentMirrorBridgeHtml = r.audit.targetZeroAnchorDescentMirrorBridge ? `<div><b>Target zero-anchor descent-mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetZeroAnchorDescentMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetZeroAnchorDescentMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetZeroAnchorDescentMirrorBridge.ak)}${r.audit.targetZeroAnchorDescentMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetZeroAnchorDescentMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetZeroAnchorDescentMirrorBridge.le)}${r.audit.targetZeroAnchorDescentMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetZeroAnchorDescentMirrorBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontCarryAnchorTwinBridgeHtml = r.audit.targetFrontCarryAnchorTwinBridge ? `<div><b>Target front-carry anchor-twin bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.ak)}${r.audit.targetFrontCarryAnchorTwinBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.le)}${r.audit.targetFrontCarryAnchorTwinBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altLE) : ''}</li></ul></div>` : '';
   const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
@@ -4753,6 +4871,7 @@ function renderResult(r){
       ${targetZeroCenterAnchorComplementBridgeHtml}
       ${targetFrontMirrorTailReverseBridgeHtml}
       ${targetFrontSumAnchorMirrorBridgeHtml}
+      ${targetZeroAnchorDescentMirrorBridgeHtml}
       ${targetFrontCarryAnchorTwinBridgeHtml}
       ${decisionEngineHtml}
       ${worldReplayHtml}
@@ -4767,7 +4886,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V7.1 memakai Decision Engine: semua digit dinilai lebih dulu, dibandingkan, lalu 6 digit dipilih langsung. Modul lama tidak menjalankan forceXXXRescue berlapis setelah pemilihan; AKLE, anchor, market, twin, replay, bridge, front-carry anchor-twin, zero-center anchor-complement, front-mirror tail-reversal, dan front-sum anchor-mirror hanya menjadi sumber skor keputusan.</p>
+      <p class="tagline">Engine V7.2 memakai Decision Engine: semua digit dinilai lebih dulu, dibandingkan, lalu 6 digit dipilih langsung. Modul lama tidak menjalankan forceXXXRescue berlapis setelah pemilihan; AKLE, anchor, market, twin, replay, bridge, front-carry anchor-twin, zero-center anchor-complement, front-mirror tail-reversal, front-sum anchor-mirror, dan zero-anchor descent-mirror hanya menjadi sumber skor keputusan.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
