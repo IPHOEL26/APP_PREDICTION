@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V9.0 • Decision Engine + Anchor Cross-Lock Center-Zero Bridge';
+const APP_VERSION = 'IPHOEL Formula Engine V9.1 • Decision Engine + Tail-Zero Anchor-Front Sum Bridge';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -186,6 +186,7 @@ function buildFormulaPrediction(inputRows){
   applyTargetCenterSumTailLockBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetAnchorNineZeroTailMirrorBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetAnchorCrossLockCenterZeroBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
+  applyTargetTailZeroAnchorFrontSumBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   applyTargetFrontCarryAnchorTwinBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile);
   const replayProfile = buildWorldFormulaReplayProfile(rows, targetDay);
   candidate.replayProfile = replayProfile;
@@ -236,6 +237,7 @@ function buildFormulaPrediction(inputRows){
   audit.targetCenterSumTailLockBridge = buildTargetCenterSumTailLockBridgeAudit(candidate.targetCenterSumTailLockBridgeAudit);
   audit.targetAnchorNineZeroTailMirrorBridge = buildTargetAnchorNineZeroTailMirrorBridgeAudit(candidate.targetAnchorNineZeroTailMirrorBridgeAudit);
   audit.targetAnchorCrossLockCenterZeroBridge = buildTargetAnchorCrossLockCenterZeroBridgeAudit(candidate.targetAnchorCrossLockCenterZeroBridgeAudit);
+  audit.targetTailZeroAnchorFrontSumBridge = buildTargetTailZeroAnchorFrontSumBridgeAudit(candidate.targetTailZeroAnchorFrontSumBridgeAudit);
   audit.targetFrontCarryAnchorTwinBridge = buildTargetFrontCarryAnchorTwinBridgeAudit(candidate.targetFrontCarryAnchorTwinBridgeAudit);
   audit.decisionEngine = buildDecisionEngineAudit(candidate.decisionEngine);
   audit.worldReplay = buildWorldFormulaReplayAudit(replayProfile, candidate);
@@ -5523,6 +5525,112 @@ function buildTargetAnchorCrossLockCenterZeroBridgeAudit(audit){
   return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le, altAK:audit.altAK, altLE:audit.altLE};
 }
 
+
+// V9.1: Target Tail-Zero Anchor-Front Sum Bridge
+// Dinamis untuk latest non-kembar berekor zero, dengan anchor target mengunci L latest di E anchor.
+// Struktur utama: AK = E latest + (A anchor + K anchor), LE = K latest + mirror10(A anchor).
+// Contoh: latest 4230 + anchor Minggu 1563 membuka AK 06, LE 29.
+function targetTailZeroAnchorFrontSumBridgeContext(latest, targetAnchor, transitionProfile, marketProfile){
+  const ld = latest?.digits || [];
+  const ad = targetAnchor?.digits || [];
+  if(ld.length < 4 || ad.length < 4) return null;
+  const transitionSamples = Number(transitionProfile?.total || marketProfile?.total || 0);
+  if(transitionSamples < 4) return null;
+  if(twinInfo(latest).twins.length) return null;
+  if(ld[3] !== 0) return null;
+  if(ad[3] !== ld[2]) return null;
+  if(ad[0] === 0) return null;
+  const frontSum = mod10(ad[0] + ad[1]);
+  if(frontSum === ld[3]) return null;
+
+  const akA = ld[3];
+  const akK = frontSum;
+  const leL = ld[1];
+  const leE = mod10(10 - ad[0]);
+  const altAK = `${akA}${ad[1]}`;
+  const altLE = `${ld[2]}${leE}`;
+  const mirrorA9 = mod10(9 - ld[0]);
+  const mirrorL9 = mod10(9 - ld[2]);
+  const anchorL = ad[2];
+  const anchorE = ad[3];
+  const latestA = ld[0];
+  const latestRoot = digitalRoot(sumDigits(latest));
+  const anchorRoot = digitalRoot(sumDigits(targetAnchor));
+  const tailLock = ld[3] === 0 && ad[3] === ld[2];
+  const core = uniqueDigits([akA, akK, leL, leE, altAK[1], altLE[0], mirrorA9, mirrorL9, anchorL, anchorE, latestA, latestRoot, anchorRoot]);
+  return {
+    ld, ad, transitionSamples, tailLock, frontSum,
+    akA, akK, leL, leE, altAK, altLE, mirrorA9, mirrorL9, anchorL, anchorE, latestA, latestRoot, anchorRoot,
+    ak:`${akA}${akK}`,
+    le:`${leL}${leE}`,
+    core
+  };
+}
+
+function applyTargetTailZeroAnchorFrontSumBridge(candidate, latest, targetAnchor, transitionProfile, marketProfile){
+  candidate.targetTailZeroAnchorFrontSumBridgeScore = Array(10).fill(0);
+  candidate.targetTailZeroAnchorFrontSumBridgeDigits = [];
+  candidate.targetTailZeroAnchorFrontSumBridgeAudit = null;
+  const ctx = targetTailZeroAnchorFrontSumBridgeContext(latest, targetAnchor, transitionProfile, marketProfile);
+  if(!ctx) return;
+  const add = (d, amount, note) => {
+    d = Number(d);
+    if(!Number.isInteger(d) || d < 0 || d > 9) return;
+    candidate.targetTailZeroAnchorFrontSumBridgeScore[d] += amount;
+    addCandidateTrace(candidate, d, amount, note, 'targetTailZeroAnchorFrontSumBridge');
+  };
+  const sampleBoost = Math.min(8200, 560 * Math.max(0, ctx.transitionSamples - 4));
+  const base = 132000;
+  const lockBoost = ctx.tailLock ? 38200 : 0;
+  add(ctx.akA, base + 308000 + sampleBoost + lockBoost, 'Target tail-zero anchor-front sum: E latest zero menjadi A');
+  add(ctx.akK, base + 338000 + sampleBoost + lockBoost, 'Target tail-zero anchor-front sum: A+K anchor menjadi K');
+  add(ctx.leL, base + 316000 + sampleBoost + lockBoost, 'Target tail-zero anchor-front sum: K latest menjadi L');
+  add(ctx.leE, base + 372000 + sampleBoost + lockBoost, 'Target tail-zero anchor-front sum: mirror10 A anchor menjadi E');
+  add(ctx.altAK[1], 18800, 'Target tail-zero anchor-front sum: anchor K support');
+  add(ctx.altLE[0], 16600, 'Target tail-zero anchor-front sum: L latest support');
+  add(ctx.mirrorA9, 14200, 'Target tail-zero anchor-front sum: mirror9 A latest support');
+  add(ctx.mirrorL9, 12600, 'Target tail-zero anchor-front sum: mirror9 L latest support');
+  add(ctx.anchorL, 7800, 'Target tail-zero anchor-front sum: anchor L context');
+  add(ctx.anchorE, 7200, 'Target tail-zero anchor-front sum: anchor E / latest L lock');
+  add(ctx.latestRoot, 5400, 'Target tail-zero anchor-front sum: root latest context');
+  add(ctx.anchorRoot, 4800, 'Target tail-zero anchor-front sum: root anchor context');
+  candidate.targetTailZeroAnchorFrontSumBridgeDigits = ctx.core
+    .filter(d => (candidate.targetTailZeroAnchorFrontSumBridgeScore[d] || 0) > 0)
+    .sort((x,y) => (candidate.targetTailZeroAnchorFrontSumBridgeScore[y] || 0) - (candidate.targetTailZeroAnchorFrontSumBridgeScore[x] || 0));
+  candidate.targetTailZeroAnchorFrontSumBridgeAudit = {
+    title:`Target tail-zero anchor-front sum bridge aktif: latest ${ctx.ld.join('')} + anchor ${ctx.ad.join('')}`,
+    digits:candidate.targetTailZeroAnchorFrontSumBridgeDigits.map(d => `${d}:${Math.round(candidate.targetTailZeroAnchorFrontSumBridgeScore[d] || 0)}`).join(' | '),
+    ak:ctx.ak,
+    le:ctx.le,
+    altAK:ctx.altAK,
+    altLE:ctx.altLE
+  };
+}
+
+function targetTailZeroAnchorFrontSumBridgePairSeeds(latest, targetAnchor, candidate, kind){
+  const ctx = targetTailZeroAnchorFrontSumBridgeContext(latest, targetAnchor, candidate?.transitionProfile, candidate?.marketProfile);
+  if(!ctx) return [];
+  const seeds = [];
+  const add = (pair, bonus, label) => { if(/^\d{2}$/.test(pair)) seeds.push({pair, width:2, bonus, label}); };
+  const base = 7200000;
+  const lockBoost = ctx.tailLock ? 1520000 : 0;
+  if(kind === 'AK'){
+    add(ctx.ak, base + 1940000 + lockBoost, 'AK target tail-zero anchor-front sum: zero tail + A+K anchor');
+    add(ctx.altAK, Math.round(base*0.42), 'AK target tail-zero anchor-front sum: zero tail + anchor K support');
+    add(`${ctx.akK}${ctx.leL}`, Math.round(base*0.30), 'AK target tail-zero anchor-front sum: front sum + K latest support');
+  }else{
+    add(ctx.le, base + 2020000 + lockBoost, 'LE target tail-zero anchor-front sum: K latest + mirror10 A anchor');
+    add(ctx.altLE, Math.round(base*0.42), 'LE target tail-zero anchor-front sum: L latest + mirror10 A anchor support');
+    add(`${ctx.akK}${ctx.leE}`, Math.round(base*0.32), 'LE target tail-zero anchor-front sum: front sum + mirror10 A anchor support');
+  }
+  return seeds;
+}
+
+function buildTargetTailZeroAnchorFrontSumBridgeAudit(audit){
+  if(!audit) return null;
+  return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le, altAK:audit.altAK, altLE:audit.altLE};
+}
+
 function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const score = Array(10).fill(0);
   const reasons = Array.from({length:10}, () => []);
@@ -5576,6 +5684,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     ['targetCenterSumTailLockBridgeScore', 1.88, 'target center-sum tail-lock bridge'],
     ['targetAnchorNineZeroTailMirrorBridgeScore', 1.92, 'target anchor-nine zero tail-mirror bridge'],
     ['targetAnchorCrossLockCenterZeroBridgeScore', 1.98, 'target anchor cross-lock center-zero bridge'],
+    ['targetTailZeroAnchorFrontSumBridgeScore', 2.04, 'target tail-zero anchor-front sum bridge'],
     ['centerBridgeScore', 0.16, 'center bridge'],
     ['boundaryTailScore', 0.14, 'boundary-tail'],
     ['postTwinSpreadScore', 0.16, 'post-twin spread'],
@@ -5616,7 +5725,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     selected:selected.slice(),
     score,
     ranked,
-    note:'V8.9 memilih langsung dari skor total semua digit. Tidak ada forceXXXRescue setelah pemilihan; zero-center anchor-tail echo, front-lock twin-tail split, front-step anchor return, tail-reversal anchor-center twin, center-twin anchor-line return, tail-zero anchor-frame center, double-twin tail-mirror, anchor-echo L-mirror, center-sum tail-lock, anchor-nine zero tail-mirror, anchor cross-lock center-zero dan twin repeat gate ikut sebagai sumber skor keputusan.'
+    note:'V9.1 memilih langsung dari skor total semua digit. Tidak ada forceXXXRescue setelah pemilihan; zero-center anchor-tail echo, front-lock twin-tail split, front-step anchor return, tail-reversal anchor-center twin, center-twin anchor-line return, tail-zero anchor-frame center, double-twin tail-mirror, anchor-echo L-mirror, center-sum tail-lock, anchor-nine zero tail-mirror, anchor cross-lock center-zero, tail-zero anchor-front sum dan twin repeat gate ikut sebagai sumber skor keputusan.'
   };
   return selected;
 }
@@ -6534,6 +6643,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(targetCenterSumTailLockBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target center-sum tail-lock bridge');
   pushSeeds(targetAnchorNineZeroTailMirrorBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target anchor-nine zero tail-mirror bridge');
   pushSeeds(targetAnchorCrossLockCenterZeroBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target anchor cross-lock center-zero bridge');
+  pushSeeds(targetTailZeroAnchorFrontSumBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target tail-zero anchor-front sum bridge');
   pushSeeds(targetFrontCarryAnchorTwinBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target front-carry anchor-twin bridge');
   pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
@@ -7027,6 +7137,7 @@ function renderResult(r){
   const targetCenterSumTailLockBridgeHtml = r.audit.targetCenterSumTailLockBridge ? `<div><b>Target center-sum tail-lock bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetCenterSumTailLockBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetCenterSumTailLockBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetCenterSumTailLockBridge.ak)}${r.audit.targetCenterSumTailLockBridge.altAK ? ' / '+escapeHtml(r.audit.targetCenterSumTailLockBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetCenterSumTailLockBridge.le)}${r.audit.targetCenterSumTailLockBridge.altLE ? ' / '+escapeHtml(r.audit.targetCenterSumTailLockBridge.altLE) : ''}</li></ul></div>` : '';
   const targetAnchorNineZeroTailMirrorBridgeHtml = r.audit.targetAnchorNineZeroTailMirrorBridge ? `<div><b>Target anchor-nine zero tail-mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchorNineZeroTailMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetAnchorNineZeroTailMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetAnchorNineZeroTailMirrorBridge.ak)}${r.audit.targetAnchorNineZeroTailMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetAnchorNineZeroTailMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetAnchorNineZeroTailMirrorBridge.le)}${r.audit.targetAnchorNineZeroTailMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetAnchorNineZeroTailMirrorBridge.altLE) : ''}</li></ul></div>` : '';
   const targetAnchorCrossLockCenterZeroBridgeHtml = r.audit.targetAnchorCrossLockCenterZeroBridge ? `<div><b>Target anchor cross-lock center-zero bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchorCrossLockCenterZeroBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetAnchorCrossLockCenterZeroBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetAnchorCrossLockCenterZeroBridge.ak)}${r.audit.targetAnchorCrossLockCenterZeroBridge.altAK ? ' / '+escapeHtml(r.audit.targetAnchorCrossLockCenterZeroBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetAnchorCrossLockCenterZeroBridge.le)}${r.audit.targetAnchorCrossLockCenterZeroBridge.altLE ? ' / '+escapeHtml(r.audit.targetAnchorCrossLockCenterZeroBridge.altLE) : ''}</li></ul></div>` : '';
+  const targetTailZeroAnchorFrontSumBridgeHtml = r.audit.targetTailZeroAnchorFrontSumBridge ? `<div><b>Target tail-zero anchor-front sum bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetTailZeroAnchorFrontSumBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetTailZeroAnchorFrontSumBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetTailZeroAnchorFrontSumBridge.ak)}${r.audit.targetTailZeroAnchorFrontSumBridge.altAK ? ' / '+escapeHtml(r.audit.targetTailZeroAnchorFrontSumBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetTailZeroAnchorFrontSumBridge.le)}${r.audit.targetTailZeroAnchorFrontSumBridge.altLE ? ' / '+escapeHtml(r.audit.targetTailZeroAnchorFrontSumBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontCarryAnchorTwinBridgeHtml = r.audit.targetFrontCarryAnchorTwinBridge ? `<div><b>Target front-carry anchor-twin bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.ak)}${r.audit.targetFrontCarryAnchorTwinBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.le)}${r.audit.targetFrontCarryAnchorTwinBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altLE) : ''}</li></ul></div>` : '';
   const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
@@ -7074,6 +7185,7 @@ function renderResult(r){
       ${targetCenterSumTailLockBridgeHtml}
       ${targetAnchorNineZeroTailMirrorBridgeHtml}
       ${targetAnchorCrossLockCenterZeroBridgeHtml}
+      ${targetTailZeroAnchorFrontSumBridgeHtml}
       ${targetFrontCarryAnchorTwinBridgeHtml}
       ${decisionEngineHtml}
       ${worldReplayHtml}
