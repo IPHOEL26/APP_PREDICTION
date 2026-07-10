@@ -17,7 +17,7 @@
     </header>
 
     <section class="notice">
-      <b>Catatan:</b> keluaran angka tetap bersifat acak. Aplikasi ini hanya membaca jejak rumus historis dan tidak menjamin hasil.
+      <b>Catatan:</b> keluaran angka tetap bersifat acak. Sira Scanner Lokal memproses data di perangkat, membaca seluruh riwayat, dan tidak menjamin hasil.
     </section>
 
     <main class="layout">
@@ -29,10 +29,25 @@
           </div>
           <span class="pill muted" id="rowCounter">0 baris</span>
         </div>
-        <textarea id="dataInput" spellcheck="false" placeholder="Tempel data seperti ini:
+        <div class="scanner-frame" id="scannerFrame">
+          <textarea id="dataInput" spellcheck="false" placeholder="Tempel data seperti ini:
 3 Kamis, 25/Jun/2026 SYD [2306] 2 0 1 3
 4 Rabu, 24/Jun/2026 SYD [2305] 9 1 7 7
 5 Selasa, 23/Jun/2026 SYD [2304] 6 8 6 0"></textarea>
+          <div class="history-scan-overlay" aria-hidden="true">
+            <span class="scan-edge scan-edge-left"></span>
+            <span class="scan-edge scan-edge-right"></span>
+            <span class="scan-beam"></span>
+          </div>
+        </div>
+        <div class="scanner-console" aria-live="polite">
+          <div>
+            <small>Sira Scanner Lokal</small>
+            <b id="scannerStatus">Menunggu data • 0 baris</b>
+          </div>
+          <span class="scanner-cursor" id="scannerCursor">0/0</span>
+          <div class="scanner-meter"><span id="scannerMeter"></span></div>
+        </div>
         <div class="single-action">
           <button class="btn danger" id="btnClear">Reset / Bersihkan</button>
         </div>
@@ -57,6 +72,6 @@
     </main>
   </div>
 
-  <script src="script.js?v=10.9.0"></script>
+  <script src="script.js?v=11.0.0"></script>
 </body>
 </html>
