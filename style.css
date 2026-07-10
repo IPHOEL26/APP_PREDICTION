@@ -82,3 +82,20 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 
 .five-strong-box{margin:14px auto 0;border:1px solid #bfdbfe;border-radius:24px;background:#eff6ff;padding:12px;text-align:center}
 .five-strong-box small{display:block;color:#1d4ed8;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}.digits.compact .digit{width:54px;height:68px;font-size:30px}.digit.strong-five{border-style:solid}
+
+/* V11.0 • Sira Full-History Scanner visual */
+.scanner-frame{position:relative;border-radius:24px;overflow:hidden;isolation:isolate}
+.scanner-frame textarea{display:block;position:relative;z-index:1;margin:0;width:100%}
+.history-scan-overlay{position:absolute;inset:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .25s ease;background:linear-gradient(90deg,rgba(37,99,235,.035),transparent 18%,transparent 82%,rgba(16,185,129,.035))}
+.scanner-frame.is-scanning .history-scan-overlay{opacity:1}
+.scan-beam{position:absolute;left:10px;right:10px;height:3px;top:8px;border-radius:999px;background:linear-gradient(90deg,transparent,#38bdf8 18%,#facc15 50%,#22c55e 82%,transparent);box-shadow:0 0 8px #38bdf8,0 0 18px rgba(250,204,21,.7),0 0 30px rgba(34,197,94,.45);animation:historyScanSweep 2.2s cubic-bezier(.45,.05,.55,.95) infinite alternate}
+.scan-beam::before,.scan-beam::after{content:"";position:absolute;left:0;right:0;height:38px;transform:translateY(-18px);background:linear-gradient(180deg,transparent,rgba(56,189,248,.08),rgba(250,204,21,.13),rgba(34,197,94,.07),transparent);filter:blur(2px)}
+.scan-edge{position:absolute;top:10px;bottom:10px;width:2px;border-radius:999px;background:linear-gradient(180deg,#38bdf8,#facc15,#22c55e,#38bdf8);background-size:100% 220%;animation:scanEdgeFlow 1.4s linear infinite}
+.scan-edge-left{left:7px}.scan-edge-right{right:7px}
+.scanner-frame.is-complete{box-shadow:0 0 0 2px rgba(34,197,94,.16)}
+.scanner-console{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:center;margin-top:10px;padding:11px 13px;border:1px solid #dbeafe;border-radius:16px;background:linear-gradient(135deg,#f8fbff,#fffdf2);color:#334155}
+.scanner-console small{display:block;font-size:9px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#2563eb;margin-bottom:2px}.scanner-console b{display:block;font-size:11px;line-height:1.35}.scanner-cursor{display:grid;place-items:center;min-width:50px;height:28px;padding:0 8px;border-radius:10px;background:#0f172a;color:#fff;font-size:10px;font-weight:900;font-variant-numeric:tabular-nums}
+.scanner-meter{grid-column:1/-1;height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden}.scanner-meter span{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#2563eb,#38bdf8,#facc15,#22c55e);transition:width .32s ease}
+@keyframes historyScanSweep{0%{top:8px}100%{top:calc(100% - 11px)}}
+@keyframes scanEdgeFlow{0%{background-position:0 0}100%{background-position:0 220%}}
+@media(prefers-reduced-motion:reduce){.scan-beam,.scan-edge{animation-duration:5s}}
