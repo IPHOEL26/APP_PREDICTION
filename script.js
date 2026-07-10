@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V11.1 • Scanner-Gated Formula Router + Empirical Carry Control';
+const APP_VERSION = 'IPHOEL Formula Engine V11.2 • Scanner-Gated Formula Router + Coverage Quorum Rotor';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -8531,21 +8531,62 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   // Fallback terakhir hanya bila data sangat tipis.
   ranked.forEach(x=>{if(selected.length<6&&!selected.includes(x.digit))selected.push(x.digit);});
 
-  // Minimal dua kandidat harus memiliki coverage lintas posisi/depth bila tersedia.
+  // V11.2: Coverage Quorum Rotor.
+  // Scanner bukan sekadar memberi skor: komposisi final wajib membawa kuorum digit yang
+  // benar-benar berada di papan atas coverage seluruh riwayat. Carry latest yang masih
+  // berada dalam batas empiris dilindungi; korban pertama adalah kandidat non-carry
+  // di luar top coverage yang paling lemah.
   const historyCtx=candidate.targetFullHistoryCoverageBalanceBridgeContext;
   let coverageDecision='tidak ada penggantian';
   if(historyCtx){
     const maxCov=Math.max(1,...historyCtx.coverage);
     const broad=d=>historyCtx.positions[d].size>=2&&historyCtx.depthBands[d].size>=2&&historyCtx.coverage[d]/maxCov>=0.48;
     let broadCount=selected.filter(broad).length;
-    const outsiders=ranked.map(x=>x.digit).filter(d=>!selected.includes(d)&&broad(d));
-    while(broadCount<2&&outsiders.length){
-      const incoming=outsiders.shift();
+    const broadOutsiders=ranked.map(x=>x.digit).filter(d=>!selected.includes(d)&&broad(d));
+    while(broadCount<2&&broadOutsiders.length){
+      const incoming=broadOutsiders.shift();
       const victim=selected.slice().reverse().find(d=>!broad(d)&&(!latestSet.includes(d)||selected.filter(x=>latestSet.includes(x)).length>carryCap));
       if(victim==null)break;
       selected[selected.indexOf(victim)]=incoming;
       broadCount++;
       coverageDecision=`${victim} diganti ${incoming} oleh coverage lintas-depth`;
+    }
+
+    const topCoverage=historyCtx.digitRank.slice(0,6).map(x=>x.digit);
+    const topCoverageSet=new Set(topCoverage);
+    const deepEligible=d=>historyCtx.positions[d].size>=2&&historyCtx.depthBands[d].size>=2;
+    const quorumTarget=historyCtx.n>=6?4:3;
+    let quorumCount=selected.filter(d=>topCoverageSet.has(d)).length;
+    const incomingQueue=topCoverage
+      .filter(d=>!selected.includes(d)&&deepEligible(d))
+      .sort((a,b)=>(historyCtx.coverage[b]||0)-(historyCtx.coverage[a]||0)||
+        (historyCtx.recurrenceDigit[b]||0)-(historyCtx.recurrenceDigit[a]||0)||a-b);
+    const rotorNotes=[];
+    while(quorumCount<quorumTarget&&incomingQueue.length){
+      const incoming=incomingQueue.shift();
+      const carryNow=selected.filter(d=>latestSet.includes(d)).length;
+      if(latestSet.includes(incoming)&&carryNow>=carryCap)continue;
+      const victimPool=selected
+        .filter(d=>!topCoverageSet.has(d))
+        .filter(d=>!latestSet.includes(d))
+        .sort((a,b)=>(score[a]||0)-(score[b]||0)||
+          (historyCtx.coverage[a]||0)-(historyCtx.coverage[b]||0)||a-b);
+      const fallbackPool=selected
+        .filter(d=>!topCoverageSet.has(d))
+        .filter(d=>!latestSet.includes(d)||carryNow>carryCap)
+        .sort((a,b)=>(score[a]||0)-(score[b]||0)||
+          (historyCtx.coverage[a]||0)-(historyCtx.coverage[b]||0)||a-b);
+      const victim=victimPool[0]??fallbackPool[0];
+      if(victim==null)break;
+      selected[selected.indexOf(victim)]=incoming;
+      quorumCount++;
+      rotorNotes.push(`${victim}→${incoming}`);
+    }
+    if(rotorNotes.length){
+      const rotorText=`coverage quorum ${rotorNotes.join(', ')} (${quorumCount}/${quorumTarget})`;
+      coverageDecision=coverageDecision==='tidak ada penggantian'?rotorText:`${coverageDecision}; ${rotorText}`;
+    }else if(coverageDecision==='tidak ada penggantian'){
+      coverageDecision=`coverage quorum terpenuhi ${quorumCount}/${quorumTarget}`;
     }
   }
 
@@ -8557,16 +8598,33 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     carryCap,carryUsed:finalCarry,
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),
     gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
-    note:`V11.1 scanner menjadi formula gate. Bridge tanpa sampel, hit-rate, depth coverage, dan kondisi aktif yang cukup bernilai nol. Carry latest dibatasi empiris ${finalCarry}/${carryCap}.`
+    latestSet:latestSet.slice(),
+    note:`V11.2 scanner menjadi formula gate dan coverage quorum rotor. Bridge tanpa bukti replay bernilai nol; minimal kuorum top-coverage dipenuhi tanpa melampaui carry latest ${finalCarry}/${carryCap}.`
   };
   return selected;
 }
 
 function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   const score=candidate?.decisionEngine?.score||candidate?.routerScore||[];
-  const selected=uniqueDigits(finalDigits||[])
-    .sort((a,b)=>(score[b]||0)-(score[a]||0)||a-b)
-    .slice(0,5);
+  const final=uniqueDigits(finalDigits||[]);
+  const historyCtx=candidate?.targetFullHistoryCoverageBalanceBridgeContext;
+  const latestSet=new Set(candidate?.decisionEngine?.latestSet||[]);
+  const selected=[];
+  const add=d=>{d=Number(d);if(Number.isInteger(d)&&!selected.includes(d)&&final.includes(d)&&selected.length<5)selected.push(d);};
+  if(historyCtx){
+    // Empat slot utama mengikuti kuorum coverage penuh; satu slot terakhir boleh diisi
+    // carry historis yang sah. Dengan begitu 5 digit tidak kembali menjadi latest-only.
+    const topCoverageSet=new Set(historyCtx.digitRank.slice(0,6).map(x=>x.digit));
+    final.filter(d=>topCoverageSet.has(d))
+      .sort((a,b)=>(score[b]||0)-(score[a]||0)||
+        (historyCtx.coverage[b]||0)-(historyCtx.coverage[a]||0)||a-b)
+      .slice(0,4).forEach(add);
+    final.filter(d=>latestSet.has(d)&&!selected.includes(d))
+      .sort((a,b)=>((candidate.marketProfile?.carryDigitCounts||[])[b]||0)-((candidate.marketProfile?.carryDigitCounts||[])[a]||0)||
+        (score[b]||0)-(score[a]||0)||a-b)
+      .forEach(add);
+  }
+  final.slice().sort((a,b)=>(score[b]||0)-(score[a]||0)||a-b).forEach(add);
   candidate.strongFiveDigits=selected;
   if(candidate.decisionEngine)candidate.decisionEngine.strongFive=selected.slice();
   return selected;
@@ -8575,7 +8633,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V11.1: scan penuh → gate formula → carry control → pilih 6 + hitung ulang 5 terkuat',
+    title:'Decision Engine V11.2: scan penuh → gate formula → carry control → coverage quorum rotor → pilih 6 + hitung ulang 5 terkuat',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -10159,7 +10217,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V11.1 memakai Scanner-Gated Formula Router: seluruh riwayat dipindai dari tertua ke terbaru, setiap keluarga formula direplay, bridge yang tidak cukup sampel/hit-rate/depth diblokir, carry latest dibatasi oleh distribusi historis, lalu 6 digit dipilih dan 5 digit dihitung ulang dari hasil final.</p>
+      <p class="tagline">Engine V11.2 memakai Scanner-Gated Formula Router + Coverage Quorum Rotor: seluruh riwayat dipindai dari tertua ke terbaru, setiap keluarga formula direplay, bridge tanpa bukti diblokir, carry latest dibatasi, lalu komposisi final wajib memenuhi kuorum coverage lintas-depth sebelum 6 digit dan 5 digit ditetapkan.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
