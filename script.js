@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V10.9 • Decision Engine + Full History Scanner Formula Router';
+const APP_VERSION = 'IPHOEL Formula Engine V11.0 • Sira Full-History Scanner + Adaptive Formula Router';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -23,6 +23,7 @@ function clearAll(){
   $('rowCounter').textContent = '0 baris';
   $('output').className = 'empty-state';
   $('output').innerHTML = '<div><div class="empty-icon">Φ</div><h3>Belum ada data</h3><p>Tempel data historis. Analisis berjalan otomatis.</p></div>';
+  setHistoryScannerVisual(false, [], 0, 'Menunggu data');
 }
 
 async function analyze(){
@@ -35,16 +36,33 @@ async function analyze(){
     $('output').innerHTML = '<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 8 baris agar mesin rumus dapat membaca transisi.</p></div>';
     return;
   }
+  setHistoryScannerVisual(true, rows, 0, 'Menyiapkan kronologi tertua → terbaru');
   const stages = buildSlowStages(rows);
   for(let i=0;i<stages.length;i++){
     if(runId !== analysisRunId) return;
     renderLoadingStage(stages, i);
+    setHistoryScannerVisual(true, rows, (i+1)/stages.length, stages[i].title);
     await sleep(stages[i].delay || 720);
   }
   if(runId !== analysisRunId) return;
   const result = buildFormulaPrediction(rows);
   if(runId !== analysisRunId) return;
   renderResult(result);
+  setHistoryScannerVisual(false, rows, 1, 'Scan selesai • formula terverifikasi');
+}
+
+
+function setHistoryScannerVisual(active, rows, progress=0, label=''){
+  const frame=$('scannerFrame');
+  const status=$('scannerStatus');
+  const meter=$('scannerMeter');
+  const cursor=$('scannerCursor');
+  if(frame?.classList){ frame.classList.toggle('is-scanning',!!active); frame.classList.toggle('is-complete',!active && progress>=1); }
+  const total=(rows||[]).length;
+  const pct=Math.max(0,Math.min(100,Math.round(progress*100)));
+  if(status) status.textContent=`${label || (active?'Scanning seluruh riwayat':'Scanner siap')} • ${total} baris`;
+  if(meter?.style) meter.style.width=`${pct}%`;
+  if(cursor) cursor.textContent=active?`${Math.max(1,Math.round(total*progress))}/${total}`:(total?`${total}/${total}`:'0/0');
 }
 
 function cleanText(text){
@@ -150,6 +168,8 @@ function buildFormulaPrediction(inputRows){
   // V10.9: scanner berjalan dulu sebelum bridge spesifik memberi bobot.
   // Ia membaca seluruh riwayat dari baris tertua ke terbaru, lalu merutekan rumus yang terbukti.
   applyTargetFullHistoryScannerRouterBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
+  // V11.0: mining formula per posisi dan depth-balance berjalan setelah scanner utama.
+  applyTargetFullHistoryCoverageBalanceBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
   applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
   applyTransitionCarryProfile(candidate, latest, transitionProfile);
   applyMarketAdaptiveMemory(candidate, latest, targetAnchor, marketProfile);
@@ -276,6 +296,7 @@ function buildFormulaPrediction(inputRows){
   audit.targetAnchorZeroFrontEchoMirrorBridge = buildTargetAnchorZeroFrontEchoMirrorBridgeAudit(candidate.targetAnchorZeroFrontEchoMirrorBridgeAudit);
   audit.targetDeepWeekdayCycleBalanceBridge = buildTargetDeepWeekdayCycleBalanceBridgeAudit(candidate.targetDeepWeekdayCycleBalanceBridgeAudit);
   audit.targetFullHistoryScannerRouterBridge = buildTargetFullHistoryScannerRouterBridgeAudit(candidate.targetFullHistoryScannerRouterBridgeAudit);
+  audit.targetFullHistoryCoverageBalanceBridge = buildTargetFullHistoryCoverageBalanceBridgeAudit(candidate.targetFullHistoryCoverageBalanceBridgeAudit);
   audit.targetFrontCarryAnchorTwinBridge = buildTargetFrontCarryAnchorTwinBridgeAudit(candidate.targetFrontCarryAnchorTwinBridgeAudit);
   audit.decisionEngine = buildDecisionEngineAudit(candidate.decisionEngine);
   audit.worldReplay = buildWorldFormulaReplayAudit(replayProfile, candidate);
@@ -7364,6 +7385,256 @@ function buildTargetFullHistoryScannerRouterBridgeAudit(audit){
   return {title:audit.title, digits:audit.digits, ak:audit.ak, le:audit.le, detail:audit.detail};
 }
 
+
+// V11.0: Full-History Coverage Balance + Per-Position Formula Mining
+// Seluruh anchor hari target dipakai dari kedalaman pertama sampai terakhir.
+// Formula dipilih hanya setelah diuji ulang pada rangkaian historis yang sudah terjadi.
+function fullHistoryV11Transform(value, name){
+  value = Number(value) || 0;
+  if(name === 'm9') return mod10(9-value);
+  if(name === 'm10') return mod10(10-value);
+  if(name === 'p1') return mod10(value+1);
+  if(name === 'm1') return mod10(value-1);
+  return mod10(value);
+}
+
+function buildFullHistoryV11RecurrenceVotes(anchors){
+  const seq = (anchors || []).slice().reverse().map(r => (r.digits || []).slice(0,4)).filter(d => d.length >= 4);
+  const posVotes = Array.from({length:4}, () => Array(10).fill(0));
+  const formulaNotes = Array.from({length:4}, () => []);
+  if(seq.length < 5) return {posVotes, formulaNotes, tested:0, accepted:0};
+  const transforms = ['raw','m9','m10','p1','m1'];
+  const ops = {
+    sum:(a,b)=>mod10(a+b),
+    diff:(a,b)=>mod10(a-b),
+    rdiff:(a,b)=>mod10(b-a),
+    abs:(a,b)=>mod10(Math.abs(a-b)),
+    prod:(a,b)=>mod10(a*b)
+  };
+  let tested = 0, accepted = 0;
+  for(let targetPos=0; targetPos<4; targetPos++){
+    const formulas = [];
+    const maxDepth = Math.max(1, seq.length-3);
+    for(let depth=1; depth<=maxDepth; depth++){
+      const trials = seq.length-depth;
+      if(trials < 3) continue;
+      for(let sourcePos=0; sourcePos<4; sourcePos++){
+        for(const transform of transforms){
+          tested++;
+          let hits=0, lastHit=-1;
+          for(let n=depth; n<seq.length; n++){
+            const pred = fullHistoryV11Transform(seq[n-depth][sourcePos], transform);
+            if(pred === seq[n][targetPos]){ hits++; lastHit=n; }
+          }
+          const rate = hits/trials;
+          if(!((hits>=2 && rate>=0.30) || (hits>=3 && rate>=0.24))) continue;
+          const pred = fullHistoryV11Transform(seq[seq.length-depth][sourcePos], transform);
+          const depthPenalty = 1/(1+0.12*(depth-1));
+          const recency = lastHit < 0 ? 0 : (lastHit+1)/seq.length;
+          const quality = (22000*hits + 76000*rate*rate + 12000*recency) * depthPenalty;
+          formulas.push({pred, quality, label:`W${depth}.${'AKLE'[sourcePos]}.${transform}`, hits, trials});
+        }
+      }
+    }
+    for(let d1=1; d1<=maxDepth; d1++){
+      for(let d2=1; d2<=maxDepth; d2++){
+        const start = Math.max(d1,d2);
+        const trials = seq.length-start;
+        if(trials < 3) continue;
+        for(let p1=0;p1<4;p1++) for(let p2=0;p2<4;p2++){
+          for(const [opName,op] of Object.entries(ops)){
+            tested++;
+            let hits=0,lastHit=-1;
+            for(let n=start;n<seq.length;n++){
+              const pred = op(seq[n-d1][p1], seq[n-d2][p2]);
+              if(pred === seq[n][targetPos]){hits++;lastHit=n;}
+            }
+            const rate=hits/trials;
+            if(!((hits>=2 && rate>=0.34) || (hits>=3 && rate>=0.26))) continue;
+            const pred=op(seq[seq.length-d1][p1],seq[seq.length-d2][p2]);
+            const depthPenalty=1/(1+0.085*(d1+d2-2));
+            const recency=lastHit<0?0:(lastHit+1)/seq.length;
+            const quality=(24000*hits+92000*rate*rate+14000*recency)*depthPenalty;
+            formulas.push({pred,quality,label:`W${d1}.${'AKLE'[p1]} ${opName} W${d2}.${'AKLE'[p2]}`,hits,trials});
+          }
+        }
+      }
+    }
+    formulas.sort((a,b)=>b.quality-a.quality || b.hits-a.hits || a.label.localeCompare(b.label));
+    const perDigitCount=Array(10).fill(0);
+    formulas.slice(0,72).forEach((f,idx)=>{
+      if(perDigitCount[f.pred] >= 10) return;
+      perDigitCount[f.pred]++;
+      const decay=Math.max(0.34,1-idx*0.012);
+      posVotes[targetPos][f.pred]+=f.quality*decay;
+      if(formulaNotes[targetPos].length<8) formulaNotes[targetPos].push(`${f.label}→${f.pred} (${f.hits}/${f.trials})`);
+      accepted++;
+    });
+  }
+  return {posVotes,formulaNotes,tested,accepted};
+}
+
+function fullHistoryV11RepeatedDigits(row){
+  const d=row?.digits||[];
+  const counts=countMap(d);
+  return Object.entries(counts).map(([digit,count])=>({digit:Number(digit),count:Number(count)})).filter(x=>x.count>=2);
+}
+
+function targetFullHistoryCoverageBalanceBridgeContext(rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile){
+  const ld=latest?.digits||[];
+  if(ld.length<4 || !targetDay || (rows||[]).length<18) return null;
+  const anchors=(rows||[]).filter(r=>r?.day===targetDay && (r.digits||[]).length>=4);
+  if(anchors.length<5) return null;
+  const n=anchors.length;
+  const coverage=Array(10).fill(0);
+  const positions=Array.from({length:10},()=>new Set());
+  const depthBands=Array.from({length:10},()=>new Set());
+  const positionScore=Array.from({length:4},()=>Array(10).fill(0));
+  anchors.forEach((row,i)=>{
+    const d=row.digits||[];
+    const depthRatio=n<=1?0:i/(n-1);
+    const depthWeight=0.92+0.22*depthRatio;
+    const band=Math.min(3,Math.floor(4*i/n));
+    d.forEach((digit,pos)=>{
+      coverage[digit]+=11800*depthWeight;
+      positions[digit].add(pos);
+      depthBands[digit].add(band);
+      positionScore[pos][digit]+=9800*depthWeight;
+    });
+  });
+  DIGITS.forEach(d=>{
+    coverage[d]+=7200*positions[d].size+6200*depthBands[d].size;
+    if(!ld.includes(d) && depthBands[d].size>=3) coverage[d]+=18000;
+    if(ld.includes(d) && depthBands[d].size<=1) coverage[d]-=9000;
+  });
+  // Boundary echo tertua hanya pendukung; tidak pernah menjadi force.
+  const oldest=anchors[anchors.length-1]?.digits||[];
+  oldest.forEach((d,p)=>{coverage[d]+=8200;positionScore[p][d]+=10500;});
+
+  const recurrence=buildFullHistoryV11RecurrenceVotes(anchors);
+  const maxRec=Math.max(1,...recurrence.posVotes.flat());
+  recurrence.posVotes.forEach((arr,p)=>arr.forEach((v,d)=>{
+    const norm=v/maxRec;
+    positionScore[p][d]+=Math.round(118000*norm);
+    coverage[d]+=Math.round(42000*norm);
+  }));
+
+  // Scanner utama sudah berjalan sebelumnya; V11 tidak menghitung ulang router berat.
+
+
+  const rankPosition=p=>DIGITS.map(d=>({digit:d,points:positionScore[p][d]})).sort((a,b)=>b.points-a.points||a.digit-b.digit);
+  const posRank=[0,1,2,3].map(rankPosition);
+  const buildPairs=(p1,p2)=>{
+    const out=[];
+    posRank[p1].slice(0,6).forEach((a,ia)=>posRank[p2].slice(0,6).forEach((b,ib)=>{
+      const pair=`${a.digit}${b.digit}`;
+      let points=a.points+b.points-12000*(ia+ib);
+      if(a.digit===b.digit) points+=3200;
+      out.push({pair,points,label:`position-mining ${'AKLE'[p1]}${'AKLE'[p2]}`});
+    }));
+    const map={}; out.forEach(x=>{if(!map[x.pair]||x.points>map[x.pair].points)map[x.pair]=x;});
+    return Object.values(map).sort((a,b)=>b.points-a.points||a.pair.localeCompare(b.pair)).slice(0,10);
+  };
+  const ak=buildPairs(0,1), le=buildPairs(2,3);
+
+  // Twin calibration dari seluruh ladder target-day. Kandidat terbaru tidak otomatis menang;
+  // yang dinilai adalah bukti twin historis dan pengulangan digit lintas posisi pada anchor.
+  const historicalTwinRows=anchors.filter(r=>fullHistoryV11RepeatedDigits(r).length>0).length;
+  const twinRate=historicalTwinRows/Math.max(1,anchors.length);
+  const twinScores=Array(10).fill(0);
+  if(twinRate>=0.22){
+    anchors.forEach((r,i)=>{
+      fullHistoryV11RepeatedDigits(r).forEach(x=>{
+        const recency=1/Math.pow(i+1,1.35);
+        twinScores[x.digit]+=Math.round(5200*recency*(1+0.12*(x.count-2)));
+      });
+    });
+    // Dukungan pasangan position-mining yang membentuk twin.
+    [...ak,...le].forEach((x,i)=>{
+      const pair=String(x.pair||'');
+      if(/^([0-9])\1$/.test(pair)) twinScores[Number(pair[0])]+=Math.round(Math.max(0,x.points)/(90+i*8));
+    });
+  }
+  const twinRank=DIGITS.map(d=>({digit:d,points:twinScores[d]})).sort((a,b)=>b.points-a.points||a.digit-b.digit);
+  const twinDigit=twinRank[0]?.points>=1800?twinRank[0].digit:null;
+
+  const recurrenceDigit=Array(10).fill(0);
+  recurrence.posVotes.forEach(arr=>arr.forEach((v,d)=>recurrenceDigit[d]+=v));
+  const recurrenceRank=DIGITS.map(d=>({digit:d,points:recurrenceDigit[d]})).sort((a,b)=>b.points-a.points||a.digit-b.digit);
+  const digitRank=DIGITS.map(d=>({digit:d,points:coverage[d]})).sort((a,b)=>b.points-a.points||a.digit-b.digit);
+  const core=uniqueDigits([...digitRank.slice(0,8).map(x=>x.digit),...ak.slice(0,3).flatMap(x=>x.pair.split('').map(Number)),...le.slice(0,3).flatMap(x=>x.pair.split('').map(Number))]);
+  const latestRisk=uniqueDigits(ld).filter(d=>depthBands[d].size<=1 && !digitRank.slice(0,6).some(x=>x.digit===d));
+  return {anchors,n,coverage,positions,depthBands,positionScore,posRank,recurrence,recurrenceDigit,recurrenceRank,ak,le,twinRate,twinScores,twinDigit,digitRank,core,latestRisk};
+}
+
+function applyTargetFullHistoryCoverageBalanceBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile){
+  candidate.targetFullHistoryCoverageBalanceBridgeScore=Array(10).fill(0);
+  candidate.targetFullHistoryCoverageBalanceDampenerScore=Array(10).fill(0);
+  candidate.targetFullHistoryCoverageBalanceTwinScore=Array(10).fill(0);
+  candidate.targetFullHistoryCoverageBalanceTwinDigit=null;
+  candidate.targetFullHistoryCoverageBalanceBridgeAudit=null;
+  const ctx=targetFullHistoryCoverageBalanceBridgeContext(rows,latest,targetAnchor,targetDay,transitionProfile,marketProfile);
+  if(!ctx)return;
+  candidate.targetFullHistoryCoverageBalanceBridgeContext=ctx;
+  const maxCoverage=Math.max(1,...ctx.coverage);
+  const maxRecurrence=Math.max(1,...ctx.recurrenceDigit);
+  const coverageRankIndex=Object.fromEntries(ctx.digitRank.map((x,i)=>[x.digit,i]));
+  const recurrenceRankIndex=Object.fromEntries(ctx.recurrenceRank.map((x,i)=>[x.digit,i]));
+  DIGITS.forEach(d=>{
+    const covNorm=ctx.coverage[d]/maxCoverage;
+    const recNorm=ctx.recurrenceDigit[d]/maxRecurrence;
+    let amount=Math.round(32000+150000*covNorm+98000*recNorm);
+    const broad=ctx.depthBands[d].size>=3 && ctx.positions[d].size>=2;
+    const agreement=coverageRankIndex[d]<=5 && recurrenceRankIndex[d]<=4;
+    // Kandidat non-latest hanya naik bila disokong depth coverage / formula recurrence.
+    if(!latest.digits.includes(d) && agreement) amount+=210000;
+    if(!latest.digits.includes(d) && broad && coverageRankIndex[d]<=2) amount+=190000;
+    if(latest.digits.includes(d) && !broad && recurrenceRankIndex[d]>5) amount-=28000;
+    candidate.targetFullHistoryCoverageBalanceBridgeScore[d]+=amount;
+    addCandidateTrace(candidate,d,0,'V11 full-history depth + recurrence coverage','targetFullHistoryCoverageBalanceBridge');
+  });
+  // Pair-mining dipakai terutama untuk AKLE; kontribusi ke digit dibuat ringan agar tidak menimpa coverage.
+  (ctx.ak||[]).slice(0,4).forEach((x,i)=>{
+    const pair=String(x.pair||''); if(!/^\d{2}$/.test(pair))return;
+    const amount=Math.round((12000+Math.min(18000,x.points*0.035))*(1-i*0.12));
+    pair.split('').forEach(ch=>candidate.targetFullHistoryCoverageBalanceBridgeScore[Number(ch)]+=amount);
+  });
+  (ctx.le||[]).slice(0,4).forEach((x,i)=>{
+    const pair=String(x.pair||''); if(!/^\d{2}$/.test(pair))return;
+    const amount=Math.round((12000+Math.min(18000,x.points*0.035))*(1-i*0.12));
+    pair.split('').forEach(ch=>candidate.targetFullHistoryCoverageBalanceBridgeScore[Number(ch)]+=amount);
+  });
+  ctx.latestRisk.forEach((d,i)=>candidate.targetFullHistoryCoverageBalanceDampenerScore[d]-=(22000+i*3500));
+  if(ctx.twinDigit!=null){
+    candidate.targetFullHistoryCoverageBalanceTwinDigit=ctx.twinDigit;
+    candidate.targetFullHistoryCoverageBalanceTwinScore[ctx.twinDigit]=Math.max(3200,ctx.twinScores[ctx.twinDigit]);
+  }
+  candidate.targetFullHistoryCoverageBalanceBridgeAudit={
+    title:`Sira full-history position scanner: ${rows.length} baris, ${ctx.n} anchor ${targetDay}, ${ctx.recurrence.tested} formula diuji dan ${ctx.recurrence.accepted} lolos bukti`,
+    digits:ctx.digitRank.slice(0,10).map(x=>`${x.digit}:${Math.round(x.points)}`).join(' | '),
+    ak:ctx.ak.slice(0,5).map(x=>`${x.pair}:${Math.round(x.points)}`).join(' | '),
+    le:ctx.le.slice(0,5).map(x=>`${x.pair}:${Math.round(x.points)}`).join(' | '),
+    twin:ctx.twinDigit==null?`tidak dikunci (rate ${Math.round(ctx.twinRate*100)}%)`:`${ctx.twinDigit}${ctx.twinDigit} (rate ${Math.round(ctx.twinRate*100)}%)`,
+    detail:`Depth coverage membaca seluruh W1–W${ctx.n}. Latest-risk yang direm: ${ctx.latestRisk.join(',')||'-'}. Formula posisi: ${ctx.recurrence.formulaNotes.map((x,i)=>`${'AKLE'[i]}[${x.slice(0,2).join('; ')}]`).join(' | ')}`
+  };
+}
+
+function targetFullHistoryCoverageBalanceBridgePairSeeds(latest,targetAnchor,candidate,kind){
+  const ctx=candidate?.targetFullHistoryCoverageBalanceBridgeContext;
+  if(!ctx)return[];
+  const source=kind==='AK'?ctx.ak:ctx.le;
+  return (source||[]).slice(0,7).map((x,i)=>({
+    pair:x.pair,width:2,
+    bonus:Math.round(42000+Math.max(0,x.points)*0.018-i*6000),
+    label:`${kind} V11 full-history position scanner`
+  })).filter(x=>/^\d{2}$/.test(x.pair));
+}
+
+function buildTargetFullHistoryCoverageBalanceBridgeAudit(audit){
+  if(!audit)return null;
+  return {title:audit.title,digits:audit.digits,ak:audit.ak,le:audit.le,twin:audit.twin,detail:audit.detail};
+}
+
 // V10.8: Target Deep Weekday Cycle Balance Bridge
 // Tujuan: mengurangi bias latest-only dengan membaca tangga hari target dari 7/14/21/28 hari sebelumnya.
 // Bridge ini tidak memakai nama market; ia hanya aktif saat struktur weekday-offset membentuk lock matematis.
@@ -8024,6 +8295,8 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     ['targetAnchorZeroFrontEchoMirrorBridgeScore', 3.90, 'target anchor-zero front-echo mirror bridge'],
     ['targetDeepWeekdayCycleBalanceBridgeScore', 4.08, 'target deep weekday cycle balance bridge'],
     ['targetFullHistoryScannerRouterBridgeScore', 0.42, 'target full-history scanner router bridge'],
+    ['targetFullHistoryCoverageBalanceBridgeScore', 0.00, 'V11 full-history position coverage bridge (selection-only)'],
+    ['targetFullHistoryCoverageBalanceDampenerScore', 0.00, 'V11 latest-risk dampener (selection-only)'],
     ['targetFullHistoryScannerRouterBridgeDampenerScore', 0.24, 'full-history scanner latest-bias dampener'],
     ['centerBridgeScore', 0.16, 'center bridge'],
     ['boundaryTailScore', 0.14, 'boundary-tail'],
@@ -8060,12 +8333,46 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     .sort((a,b) => b.points - a.points || b.families - a.families || a.digit - b.digit);
 
   const selected = ranked.slice(0,6).map(x => x.digit);
+  // V11 diversity quota berada di dalam Decision Engine, bukan force-rescue sesudah keputusan.
+  // Ia hanya mengganti digit yang hampir tidak punya jejak pada seluruh anchor target-day.
+  const historyCtx=candidate.targetFullHistoryCoverageBalanceBridgeContext;
+  let coverageDecision='tidak ada penggantian';
+  if(historyCtx){
+    const maxCov=Math.max(1,...historyCtx.coverage);
+    const maxRec=Math.max(1,...historyCtx.recurrenceDigit);
+    const rankCov=Object.fromEntries(historyCtx.digitRank.map((x,i)=>[x.digit,i]));
+    const rankRec=Object.fromEntries(historyCtx.recurrenceRank.map((x,i)=>[x.digit,i]));
+    const weakSelected=selected.map(d=>({
+      d,
+      cov:historyCtx.coverage[d]/maxCov,
+      positions:historyCtx.positions[d].size,
+      bands:historyCtx.depthBands[d].size,
+      total:score[d]
+    })).filter(x=>x.positions<=1 && x.bands<=1)
+      .sort((a,b)=>a.cov-b.cov||a.total-b.total);
+    const deepOutside=DIGITS.filter(d=>!selected.includes(d)).map(d=>({
+      d,
+      cov:historyCtx.coverage[d]/maxCov,
+      rec:historyCtx.recurrenceDigit[d]/maxRec,
+      positions:historyCtx.positions[d].size,
+      bands:historyCtx.depthBands[d].size,
+      covRank:rankCov[d],
+      recRank:rankRec[d]
+    })).filter(x=>x.cov>=0.55 && x.positions>=2 && x.bands>=2 && (x.covRank<=4 || (x.covRank<=5 && x.recRank<=4)))
+      .sort((a,b)=>(b.cov+0.45*b.rec)-(a.cov+0.45*a.rec)||a.d-b.d);
+    if(weakSelected.length && deepOutside.length){
+      const victim=weakSelected[0], incoming=deepOutside[0];
+      selected[selected.indexOf(victim.d)]=incoming.d;
+      coverageDecision=`${victim.d} diganti ${incoming.d}: jejak anchor ${Math.round(incoming.cov*100)}% vs ${Math.round(victim.cov*100)}%`;
+    }
+  }
   candidate.decisionEngine = {
     mode:'score_compare_select',
     selected:selected.slice(),
     score,
     ranked,
-    note:'V10.9 memilih langsung dari skor total semua digit setelah full-history scanner membaca seluruh riwayat. Tidak ada forceXXXRescue setelah pemilihan; zero-center anchor-tail echo, front-lock twin-tail split, front-step anchor return, tail-reversal anchor-center twin, center-twin anchor-line return, tail-zero anchor-frame center, double-twin tail-mirror, anchor-echo L-mirror, center-sum tail-lock, anchor-nine zero tail-mirror, anchor cross-lock center-zero, tail-zero anchor-front sum, boundary-tail center-repeat, center-twin front-zero return, boundary-K anchor-L twin-mirror, anchor-center zero-twin return, tail-zero center-twin anchor-sum, anchor-lock tail-zero mirror, center-zero anchor-tail twin echo, zero-front center-twin carry, front-twin anchor-delta, zero-frame tail-twin sum, edge-twin anchor-zero mirror, tail-twin anchor-L repeat return, center-twin tail-zero front-twin return, tail-twin front-zero delta return, shared-front zero-line edge-repeat, anchor-zero front-echo mirror, deep weekday cycle balance, full-history scanner router, dan twin repeat gate ikut sebagai sumber skor keputusan.'
+    coverageDecision,
+    note:'V11.0 memilih dari skor total semua digit setelah full-history scanner membaca seluruh riwayat. Tidak ada forceXXXRescue setelah pemilihan; zero-center anchor-tail echo, front-lock twin-tail split, front-step anchor return, tail-reversal anchor-center twin, center-twin anchor-line return, tail-zero anchor-frame center, double-twin tail-mirror, anchor-echo L-mirror, center-sum tail-lock, anchor-nine zero tail-mirror, anchor cross-lock center-zero, tail-zero anchor-front sum, boundary-tail center-repeat, center-twin front-zero return, boundary-K anchor-L twin-mirror, anchor-center zero-twin return, tail-zero center-twin anchor-sum, anchor-lock tail-zero mirror, center-zero anchor-tail twin echo, zero-front center-twin carry, front-twin anchor-delta, zero-frame tail-twin sum, edge-twin anchor-zero mirror, tail-twin anchor-L repeat return, center-twin tail-zero front-twin return, tail-twin front-zero delta return, shared-front zero-line edge-repeat, anchor-zero front-echo mirror, deep weekday cycle balance, full-history scanner router, full-history position coverage, twin calibration, dan twin repeat gate ikut sebagai sumber skor keputusan.'
   };
   return selected;
 }
@@ -8089,10 +8396,11 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V7.4: nilai semua digit → bandingkan → pilih 6 + pilih 5 terkuat',
+    title:'Decision Engine V11.0: scan penuh → validasi formula → balance coverage → pilih 6 + 5 terkuat',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
+    coverageDecision:audit.coverageDecision || '',
     note:audit.note || ''
   };
 }
@@ -8603,6 +8911,7 @@ function buildTwinLabScores(candidate, finalDigits, latest){
     add(d, 0.24*((candidate.marketProfile?.twinAfterNoTwinScore || [])[d] || 0), 'market twin-after-non-twin memory');
     add(d, 0.64*((candidate.targetZeroCenterAnchorTailEchoBridgeTwinScore || [])[d] || 0), 'target zero-center anchor-tail echo twin seed');
     add(d, 0.72*((candidate.targetFullHistoryScannerRouterBridgeTwinScore || [])[d] || 0), 'full-history scanner twin seed');
+    add(d, 1.08*((candidate.targetFullHistoryCoverageBalanceTwinScore || [])[d] || 0), 'V11 full-history twin calibration');
     if((finalDigits || []).includes(d)) add(d, 360, 'masuk 6 digit formula');
   });
   if(a.length >= 4){
@@ -8822,6 +9131,8 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
     if(deepWeekdayCycleBalance > 0) add(d, Math.round(2.46*deepWeekdayCycleBalance), 'target deep weekday cycle balance twin priority');
     const fullHistoryScannerRouter = (candidate.targetFullHistoryScannerRouterBridgeTwinScore || [])[d] || 0;
     if(fullHistoryScannerRouter > 0) add(d, Math.round(2.62*fullHistoryScannerRouter), 'full-history scanner router twin priority');
+    const fullHistoryCoverageBalance = (candidate.targetFullHistoryCoverageBalanceTwinScore || [])[d] || 0;
+    if(fullHistoryCoverageBalance > 0) add(d, Math.round(3.10*fullHistoryCoverageBalance), 'V11 full-history twin calibration priority');
   });
   const diagTwin = twinDiagnosticScores(latest, candidate);
   DIGITS.forEach(d => { if(diagTwin[d]) add(d, diagTwin[d], 'diagnostic twin gate'); });
@@ -8886,7 +9197,11 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   const sharedFrontZeroLineEdgeRepeatTwin = candidate.targetSharedFrontZeroLineEdgeRepeatBridgeTwinDigit;
   const deepWeekdayCycleBalanceTwin = candidate.targetDeepWeekdayCycleBalanceBridgeTwinDigit;
   const fullHistoryScannerRouterTwin = candidate.targetFullHistoryScannerRouterBridgeTwinDigit;
-  if(fullHistoryScannerRouterTwin != null && allowed.includes(fullHistoryScannerRouterTwin) && ((candidate.targetFullHistoryScannerRouterBridgeTwinScore || [])[fullHistoryScannerRouterTwin] || 0) >= 2600){
+  const fullHistoryCoverageBalanceTwin = candidate.targetFullHistoryCoverageBalanceTwinDigit;
+  if(fullHistoryCoverageBalanceTwin != null && allowed.includes(fullHistoryCoverageBalanceTwin) && ((candidate.targetFullHistoryCoverageBalanceTwinScore || [])[fullHistoryCoverageBalanceTwin] || 0) >= 2600){
+    chosen = fullHistoryCoverageBalanceTwin;
+  }
+  if(chosen == null && fullHistoryScannerRouterTwin != null && allowed.includes(fullHistoryScannerRouterTwin) && ((candidate.targetFullHistoryScannerRouterBridgeTwinScore || [])[fullHistoryScannerRouterTwin] || 0) >= 2600){
     chosen = fullHistoryScannerRouterTwin;
   }
   if(chosen == null && deepWeekdayCycleBalanceTwin != null && allowed.includes(deepWeekdayCycleBalanceTwin) && ((candidate.targetDeepWeekdayCycleBalanceBridgeTwinScore || [])[deepWeekdayCycleBalanceTwin] || 0) >= 2600){
@@ -9386,17 +9701,18 @@ function buildSlowStages(rows){
   const latest = rows[0];
   const targetDay = inferTargetDay(rows);
   const earlyPairs = [];
-  for(let i=0;i<Math.min(3, chrono.length-1);i++) earlyPairs.push(pairText(chrono[i], chrono[i+1], formulas));
+  for(let i=0;i<Math.min(5, chrono.length-1);i++) earlyPairs.push(pairText(chrono[i], chrono[i+1], formulas));
   const recentPairs = [];
-  for(let i=Math.max(0, chrono.length-6); i<chrono.length-1; i++) recentPairs.push(pairText(chrono[i], chrono[i+1], formulas));
-  const weekPairs = buildWeekPairs(rows, formulas, latest.day, 5).concat(buildWeekPairs(rows, formulas, targetDay, 4));
-  const op = latestOperationCards(latest);
+  for(let i=Math.max(0, chrono.length-8); i<chrono.length-1; i++) recentPairs.push(pairText(chrono[i], chrono[i+1], formulas));
+  const allTargetAnchors=rows.filter(r=>r.day===targetDay);
+  const weekPairs = buildWeekPairs(rows, formulas, latest.day, 8).concat(buildWeekPairs(rows, formulas, targetDay, 8));
   return [
-    {title:'Tahap 1 • Menyusun kronologi', icon:'①', delay:850, desc:`Membaca ${rows.length} baris dari data paling lama ke paling baru.`, items:earlyPairs},
-    {title:'Tahap 2 • Membaca transisi harian', icon:'②', delay:980, desc:'Menguji rumus dari satu hari ke hari berikutnya. App mencari operasi yang pernah menembus draw sesudahnya.', items:recentPairs},
-    {title:'Tahap 3 • Membaca hari yang sama per pekan', icon:'③', delay:980, desc:'Menguji relasi seperti Senin ke Senin, Jumat ke Jumat, dan target hari berikutnya. V4.7 juga membaca jangkar hari target, carry anchor, hidden anchor, single-mirror, dan pola kembar menyebar.', items:weekPairs.length ? weekPairs : ['Belum cukup pasangan hari yang sama untuk dibaca.']},
-    {title:'Tahap 4 • Membaca operasi angka terbaru', icon:'④', delay:900, desc:`Latest ${latest.day || '-'} ${latest.digits.join(' ')} dibedah dengan tambah, kurang, kali, cermin, root, hari, dan pecah kembar.`, items:op},
-    {title:'Tahap 5 • Mengunci 6 digit formula', icon:'⑤', delay:640, desc:'Menggabungkan kunci harian, kunci pekanan, operasi kembar, cermin, tetangga, root, golden, Fibonacci, affine, dan chain.', items:['Hasil akhir ditampilkan setelah semua tahap selesai.']}
+    {title:'Tahap 1 • Scan kronologi penuh', icon:'①', delay:620, desc:`Sira Scanner membaca ${rows.length} baris dari riwayat tertua sampai terbaru tanpa menetapkan rumus terlebih dahulu.`, items:earlyPairs},
+    {title:'Tahap 2 • Klasifikasi struktur', icon:'②', delay:680, desc:'Menandai posisi nol, twin, edge, center, root, jumlah, selisih, mirror, parity, dan perubahan hari pada setiap baris.', items:recentPairs.slice(0,6)},
+    {title:'Tahap 3 • Replay seluruh transisi', icon:'③', delay:760, desc:`Menguji formula pada seluruh transisi historis. Formula yang hanya cocok sekali tidak boleh memaksa hasil.`, items:[`${Math.max(0,rows.length-1)} transisi tersedia untuk replay`,`Target hari ${targetDay}: ${allTargetAnchors.length} anchor ditemukan di seluruh kedalaman`]},
+    {title:'Tahap 4 • Mining formula per posisi', icon:'④', delay:820, desc:'Mencari formula A, K, L, dan E dari seluruh kedalaman anchor; termasuk tambah, selisih, produk, mirror, root, dan offset golden sebagai kandidat uji.', items:weekPairs.slice(0,8)},
+    {title:'Tahap 5 • Balance latest & twin', icon:'⑤', delay:680, desc:'Menurunkan digit latest yang tidak punya bukti sejarah luas dan menguji kandidat kembar dari seluruh ladder hari target.', items:['Latest boleh lolos hanya bila didukung scan.','Kembar dipilih dari bukti historis, bukan pengulangan terbaru semata.']},
+    {title:'Tahap 6 • Router keputusan', icon:'⑥', delay:520, desc:'Menggabungkan formula yang lolos validasi, menyusun AKLE, lalu memilih 6 digit dan 5 digit terkuat.', items:['Tidak ada force-rescue setelah keputusan final.']}
   ];
 }
 
@@ -9573,9 +9889,10 @@ function renderResult(r){
   const targetSharedFrontZeroLineEdgeRepeatBridgeHtml = r.audit.targetSharedFrontZeroLineEdgeRepeatBridge ? `<div><b>Target shared-front zero-line edge-repeat bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.ak)}${r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.altAK ? ' / '+escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.le)}${r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.altLE ? ' / '+escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.altLE) : ''}</li><li>Twin: ${escapeHtml(r.audit.targetSharedFrontZeroLineEdgeRepeatBridge.twin || '-')}</li></ul></div>` : '';
   const targetDeepWeekdayCycleBalanceBridgeHtml = r.audit.targetDeepWeekdayCycleBalanceBridge ? `<div><b>Target deep weekday cycle balance bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetDeepWeekdayCycleBalanceBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetDeepWeekdayCycleBalanceBridge.digits)}</li><li>Mode: ${escapeHtml(r.audit.targetDeepWeekdayCycleBalanceBridge.modes)}</li><li>${escapeHtml(r.audit.targetDeepWeekdayCycleBalanceBridge.detail || '')}</li></ul></div>` : '';
   const targetFullHistoryScannerRouterBridgeHtml = r.audit.targetFullHistoryScannerRouterBridge ? `<div><b>Full-history scanner formula router</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFullHistoryScannerRouterBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFullHistoryScannerRouterBridge.digits)}</li><li>AK router: ${escapeHtml(r.audit.targetFullHistoryScannerRouterBridge.ak)}</li><li>LE router: ${escapeHtml(r.audit.targetFullHistoryScannerRouterBridge.le)}</li><li>${escapeHtml(r.audit.targetFullHistoryScannerRouterBridge.detail || '')}</li></ul></div>` : '';
+  const targetFullHistoryCoverageBalanceBridgeHtml = r.audit.targetFullHistoryCoverageBalanceBridge ? `<div><b>Sira full-history position scanner</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFullHistoryCoverageBalanceBridge.title)}</li><li>Digit coverage: ${escapeHtml(r.audit.targetFullHistoryCoverageBalanceBridge.digits)}</li><li>AK mining: ${escapeHtml(r.audit.targetFullHistoryCoverageBalanceBridge.ak)}</li><li>LE mining: ${escapeHtml(r.audit.targetFullHistoryCoverageBalanceBridge.le)}</li><li>Twin: ${escapeHtml(r.audit.targetFullHistoryCoverageBalanceBridge.twin)}</li><li>${escapeHtml(r.audit.targetFullHistoryCoverageBalanceBridge.detail || '')}</li></ul></div>` : '';
   const targetAnchorZeroFrontEchoMirrorBridgeHtml = r.audit.targetAnchorZeroFrontEchoMirrorBridge ? `<div><b>Target anchor-zero front-echo mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.ak)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.le)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontCarryAnchorTwinBridgeHtml = r.audit.targetFrontCarryAnchorTwinBridge ? `<div><b>Target front-carry anchor-twin bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.ak)}${r.audit.targetFrontCarryAnchorTwinBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.le)}${r.audit.targetFrontCarryAnchorTwinBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altLE) : ''}</li></ul></div>` : '';
-  const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
+  const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>Coverage decision: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
@@ -9639,6 +9956,7 @@ function renderResult(r){
       ${targetAnchorZeroFrontEchoMirrorBridgeHtml}
       ${targetDeepWeekdayCycleBalanceBridgeHtml}
       ${targetFullHistoryScannerRouterBridgeHtml}
+      ${targetFullHistoryCoverageBalanceBridgeHtml}
       ${targetFrontCarryAnchorTwinBridgeHtml}
       ${decisionEngineHtml}
       ${worldReplayHtml}
@@ -9653,7 +9971,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V10.9 memakai Decision Engine + Full-History Scanner: semua digit dinilai lebih dulu, dibandingkan, lalu 6 digit dipilih langsung. Modul lama tidak menjalankan forceXXXRescue berlapis setelah pemilihan; AKLE, anchor, market, twin, replay, bridge, front-carry anchor-twin, zero-center anchor-complement, front-mirror tail-reversal, front-sum anchor-mirror, zero-anchor descent-mirror, tail-anchor front-reversal, anchor-same-A center-mirror, anchor-edge zero-return, anchor-edge mirror-carry, latest-k mirror anchor-center-zero, center-twin anchor-zero, anchor-tail mirror-descent, edge-center twin anchor-middle, zero-center anchor-tail echo, front-lock twin-tail split, front-step anchor return, tail-reversal anchor-center twin, center-twin anchor-line return, tail-zero anchor-frame center, double-twin tail-mirror, anchor-echo L-mirror, center-sum tail-lock, anchor-nine zero tail-mirror, anchor cross-lock center-zero, tail-zero anchor-front sum, boundary-tail center-repeat, center-twin front-zero return, boundary-K anchor-L twin-mirror, anchor-center zero-twin return, tail-zero center-twin anchor-sum, anchor-lock tail-zero mirror, center-zero anchor-tail twin echo, zero-front center-twin carry, front-twin anchor-delta, zero-frame tail-twin sum, edge-twin anchor-zero mirror, tail-twin anchor-L repeat return, center-twin tail-zero front-twin return, tail-twin front-zero delta return, shared-front zero-line edge-repeat, anchor-zero front-echo mirror, deep weekday cycle balance, full-history scanner router, dan twin repeat gate hanya menjadi sumber skor keputusan.</p>
+      <p class="tagline">Engine V11.0 memakai Sira Full-History Scanner + Adaptive Formula Router: semua digit dinilai lebih dulu, dibandingkan, lalu 6 digit dipilih langsung. Modul lama tidak menjalankan forceXXXRescue berlapis setelah pemilihan; AKLE, anchor, market, twin, replay, bridge, front-carry anchor-twin, zero-center anchor-complement, front-mirror tail-reversal, front-sum anchor-mirror, zero-anchor descent-mirror, tail-anchor front-reversal, anchor-same-A center-mirror, anchor-edge zero-return, anchor-edge mirror-carry, latest-k mirror anchor-center-zero, center-twin anchor-zero, anchor-tail mirror-descent, edge-center twin anchor-middle, zero-center anchor-tail echo, front-lock twin-tail split, front-step anchor return, tail-reversal anchor-center twin, center-twin anchor-line return, tail-zero anchor-frame center, double-twin tail-mirror, anchor-echo L-mirror, center-sum tail-lock, anchor-nine zero tail-mirror, anchor cross-lock center-zero, tail-zero anchor-front sum, boundary-tail center-repeat, center-twin front-zero return, boundary-K anchor-L twin-mirror, anchor-center zero-twin return, tail-zero center-twin anchor-sum, anchor-lock tail-zero mirror, center-zero anchor-tail twin echo, zero-front center-twin carry, front-twin anchor-delta, zero-frame tail-twin sum, edge-twin anchor-zero mirror, tail-twin anchor-L repeat return, center-twin tail-zero front-twin return, tail-twin front-zero delta return, shared-front zero-line edge-repeat, anchor-zero front-echo mirror, deep weekday cycle balance, full-history scanner router, full-history position coverage, twin calibration, dan twin repeat gate hanya menjadi sumber skor keputusan.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
