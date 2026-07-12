@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V11.8 • Twin-Release Family Frontier + Exact-Position Rescue';
+const APP_VERSION = 'IPHOEL Formula Engine V12.0 • Walk-Forward Router Judge + Carry-Role Balance + Repeat-Shape Calibration';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -173,6 +173,9 @@ function buildFormulaPrediction(inputRows){
   // V11.8: source/latest hanya boleh masuk melalui transformasi yang direplay pada transisi hari yang sama.
   // Raw carry tidak dihitung sebagai transformasi dan carry cap tidak pernah dianggap kuota.
   applySourceTransformEmergencePortfolio(candidate, rows, latest, targetDay);
+  // V12.0: router judge melakukan walk-forward pada market/hari aktif. Ia tidak memberi bobot langsung;
+  // hanya router yang menang out-of-sample boleh melakukan maksimal satu rescue bersyarat.
+  applyWalkForwardRouterJudge(candidate, rows, latest, targetDay);
   // V11.1: scanner sekarang menjadi gate. Bridge lama belum boleh memberi pengaruh sebelum lolos replay.
   candidate.formulaGate = buildFullHistoryFormulaGate(rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
   applyTargetDayAnchor(candidate, targetAnchor, formulas, latest);
@@ -305,6 +308,7 @@ function buildFormulaPrediction(inputRows){
   audit.targetFullHistoryScannerRouterBridge = buildTargetFullHistoryScannerRouterBridgeAudit(candidate.targetFullHistoryScannerRouterBridgeAudit);
   audit.targetFullHistoryCoverageBalanceBridge = buildTargetFullHistoryCoverageBalanceBridgeAudit(candidate.targetFullHistoryCoverageBalanceBridgeAudit);
   audit.sourceTransformEmergence = buildSourceTransformEmergenceAudit(candidate.sourceTransformEmergenceAudit);
+  audit.walkForwardRouterJudge = buildWalkForwardRouterJudgeAudit(candidate.walkForwardRouterJudgeAudit);
   audit.formulaGate = buildFullHistoryFormulaGateAudit(candidate.formulaGate);
   audit.targetFrontCarryAnchorTwinBridge = buildTargetFrontCarryAnchorTwinBridgeAudit(candidate.targetFrontCarryAnchorTwinBridgeAudit);
   audit.decisionEngine = buildDecisionEngineAudit(candidate.decisionEngine);
@@ -8606,6 +8610,40 @@ function sourceTransformEmergencePairSeeds(candidate,kind){
   return out.sort((a,b)=>b.bonus-a.bonus||a.pair.localeCompare(b.pair)).slice(0,6);
 }
 
+// V12.0 Walk-Forward Router Judge.
+// Semua router dilatih hanya pada transisi source-day→target-day yang terjadi sebelum kasus validasi.
+// Hasilnya tidak menambah skor dasar; ia hanya membuka rescue bila ensemble benar-benar menang out-of-sample.
+function wfSameDayTransitions(rows,fromDay,toDay){
+  const chrono=(rows||[]).slice().reverse(),out=[];
+  for(let i=0;i<chrono.length-1;i++)if(chrono[i]?.day===fromDay&&chrono[i+1]?.day===toDay)out.push({source:chrono[i],target:chrono[i+1]});
+  return out;
+}
+function wfNormalize(arr){const max=Math.max(1e-9,...(arr||[0]));return (arr||[]).map(v=>Math.max(0,Number(v)||0)/max);}
+function wfFrequency(training){const a=Array(10).fill(0);(training||[]).forEach((tr,i)=>{const w=.78+.44*(i+1)/Math.max(1,training.length);uniqueDigits(tr.target.digits||[]).forEach(d=>a[d]+=w);});return wfNormalize(a);}
+function wfPosition(training){const pos=Array.from({length:4},()=>Array(10).fill(0));(training||[]).forEach((tr,i)=>{const w=.78+.44*(i+1)/Math.max(1,training.length);(tr.target.digits||[]).forEach((d,p)=>pos[p][d]+=w);});const norm=pos.map(wfNormalize),score=Array(10).fill(0);norm.forEach(a=>a.forEach((v,d)=>score[d]+=.25*v));return {score:wfNormalize(score),position:norm};}
+function wfCarry(training,source){const role=Array(4).fill(0),same=Array(4).fill(0);let den=0;(training||[]).forEach((tr,i)=>{const w=.80+.40*(i+1)/Math.max(1,training.length),set=new Set(tr.target.digits||[]);den+=w;for(let p=0;p<4;p++){if(set.has(tr.source.digits[p]))role[p]+=w;if(tr.source.digits[p]===tr.target.digits[p])same[p]+=w;}});const score=Array(10).fill(0),position=Array.from({length:4},()=>Array(10).fill(0));for(let p=0;p<4;p++){const q=.72*role[p]/Math.max(1e-9,den)+.28*same[p]/Math.max(1e-9,den),d=source?.digits?.[p];if(Number.isInteger(d)){score[d]+=q;position[p][d]=q;}}return {score:wfNormalize(score),position:position.map(wfNormalize),rawRole:role.map((v,p)=>.72*v/Math.max(1e-9,den)+.28*same[p]/Math.max(1e-9,den))};}
+function wfTransform(training,source){
+  const stats={};(training||[]).forEach((tr,i)=>{const set=new Set(tr.target.digits||[]),w=.76+.48*(i+1)/Math.max(1,training.length);sourceTransformTokens(tr.source).filter(t=>!t.key.startsWith('raw_')).forEach(t=>{const st=stats[t.key]||(stats[t.key]={family:t.family,hits:0,trials:0,hitW:0,totalW:0});st.trials++;st.totalW+=w;if(set.has(t.digit)){st.hits++;st.hitW+=w;}});});
+  const familyByDigit=Array.from({length:10},()=>({}));sourceTransformTokens(source).filter(t=>!t.key.startsWith('raw_')).forEach(t=>{const st=stats[t.key];if(!st)return;const rate=st.hits/Math.max(1,st.trials),smooth=(st.hits+1)/(st.trials+2),recent=st.hitW/Math.max(1e-9,st.totalW),q=(.45*rate+.35*smooth+.20*recent)*Math.min(1,st.trials/6);const old=familyByDigit[t.digit][t.family];if(!old||q>old.q)familyByDigit[t.digit][t.family]={q,hits:st.hits};});
+  const score=familyByDigit.map(g=>Object.values(g).sort((a,b)=>b.q-a.q).slice(0,5).reduce((z,x,i)=>z+x.q*[1,.64,.40,.24,.14][i],0));return wfNormalize(score);
+}
+function wfRecall(score,target){const top=DIGITS.slice().sort((a,b)=>(score[b]||0)-(score[a]||0)||a-b).slice(0,6),actual=uniqueDigits(target?.digits||[]);return actual.filter(d=>top.includes(d)).length/Math.max(1,actual.length);}
+function buildWalkForwardRouterJudgeProfile(rows,latest,targetDay){
+  const transitions=wfSameDayTransitions(rows,latest?.day,targetDay),names=['frequency','position','transform','carry'],validation=[];
+  const make=(training,source)=>{const p=wfPosition(training),c=wfCarry(training,source);return {frequency:wfFrequency(training),position:p.score,positionDetail:p.position,transform:wfTransform(training,source),carry:c.score,carryDetail:c};};
+  for(let i=3;i<transitions.length;i++){const training=transitions.slice(0,i),scores=make(training,transitions[i].source),recalls={};names.forEach(n=>recalls[n]=wfRecall(scores[n],transitions[i].target));validation.push({scores,recalls,target:transitions[i].target});}
+  const stats={};names.forEach(n=>{const vals=validation.map(v=>v.recalls[n]),avg=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0;stats[n]={avg,weight:avg>=.52?Math.pow(Math.max(0,avg-.46),1.35):0};});
+  const combine=scores=>{const out=Array(10).fill(0),den=names.reduce((z,n)=>z+(stats[n].weight||0),0);if(!den)return out;names.forEach(n=>(scores[n]||[]).forEach((v,d)=>out[d]+=(stats[n].weight||0)*v));return wfNormalize(out);};
+  const current=make(transitions,latest),ensemble=combine(current);let ensembleAvg=0;if(validation.length)ensembleAvg=validation.reduce((z,v)=>z+wfRecall(combine(v.scores),v.target),0)/validation.length;
+  const baseAvg=stats.frequency?.avg||0,bestAvg=Math.max(0,...names.map(n=>stats[n].avg||0));let improved=0,worse=0,flat=0;validation.forEach(v=>{const delta=wfRecall(combine(v.scores),v.target)-v.recalls.frequency;if(delta>.01)improved++;else if(delta<-.01)worse++;else flat++;});
+  let status='AUDIT-ONLY';if(validation.length>=2&&ensembleAvg>=baseAvg+.025&&ensembleAvg>=bestAvg-.015&&improved>=worse)status='ACTIVE';else if(validation.length>=1&&ensembleAvg>=baseAvg-.015&&improved+flat>=worse)status='TIE-BREAKER';
+  const active=names.filter(n=>(stats[n].weight||0)>0),consensus=DIGITS.map(d=>active.reduce((z,n)=>z+(DIGITS.slice().sort((a,b)=>(current[n][b]||0)-(current[n][a]||0)||a-b).slice(0,6).includes(d)?1:0),0));
+  const rank=DIGITS.map(d=>({digit:d,norm:ensemble[d]||0,consensus:consensus[d]})).sort((a,b)=>b.norm-a.norm||b.consensus-a.consensus||a.digit-b.digit);
+  return {transitions,validation,stats,current,ensemble,rank,consensus,status,ensembleAvg,baseAvg,bestAvg,improved,worse,flat};
+}
+function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.0 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
+function buildWalkForwardRouterJudgeAudit(a){if(!a)return null;return {title:a.title,routers:a.routers,result:a.result,top:a.top};}
+
 function carryBudgetProfile(profile,carryCap){
   const dist=profile?.carryOverlapDist||{};
   const alpha=0.65;
@@ -8925,6 +8963,87 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     }
   }
 
+  // V12.0 Cross-Router Position Quorum.
+  // Digit hanya boleh diselamatkan bila mendapat suara posisi dari sedikitnya dua jalur independen.
+  // Jalur yang dipakai: mining full-history, exact-position emergence, AK/LE ordered formula,
+  // dan meta-position yang telah berstatus ACTIVE. Maksimal satu rescue.
+  const routerJudge=candidate.walkForwardRouterJudge;
+  const crossPositionPromoted=[];
+  const positionVotes=Array.from({length:10},()=>({points:0,families:new Set(),positions:new Set(),details:[]}));
+  const vote=(d,family,p,amount,label)=>{d=Number(d);if(!Number.isInteger(d)||d<0||d>9||amount<=0)return;const v=positionVotes[d];v.points+=amount;v.families.add(family);v.positions.add(p);v.details.push(label);};
+  const voteRank=(family,ranks,factor=1,allowDigit=()=>true)=>{(ranks||[]).forEach((rank,p)=>{const values=(rank||[]).map(x=>({digit:Number(x.digit),points:Number(x.points||0)})),max=Math.max(1,...values.map(x=>x.points));values.slice(0,2).forEach((x,i)=>{if(!allowDigit(x.digit)||x.points<=0)return;vote(x.digit,family,p,factor*(x.points/max)*(i===0?1:.68),`${family}-${['A','K','L','E'][p]}#${i+1}`);});});};
+  voteRank('history',historyCtx?.posRank,1);
+  voteRank('emergence',emergence?.positionRank,.88,d=>(emergence?.status?.[d]||'AUDIT-ONLY')!=='AUDIT-ONLY');
+  const pairPositionRanks=Array.from({length:4},()=>[]);
+  (akle?.ak||[]).slice(0,3).forEach((x,i)=>{const q=String(x.pair||'');if(/^\d{2}$/.test(q)){pairPositionRanks[0].push({digit:Number(q[0]),points:3-i});pairPositionRanks[1].push({digit:Number(q[1]),points:3-i});}});
+  (akle?.le||[]).slice(0,3).forEach((x,i)=>{const q=String(x.pair||'');if(/^\d{2}$/.test(q)){pairPositionRanks[2].push({digit:Number(q[0]),points:3-i});pairPositionRanks[3].push({digit:Number(q[1]),points:3-i});}});
+  pairPositionRanks.forEach((arr,p)=>{const merged={};arr.forEach(x=>merged[x.digit]=(merged[x.digit]||0)+x.points);pairPositionRanks[p]=Object.entries(merged).map(([digit,points])=>({digit:Number(digit),points})).sort((a,b)=>b.points-a.points||a.digit-b.digit);});
+  voteRank('akle',pairPositionRanks,.72);
+  if(routerJudge?.status==='ACTIVE'){
+    const metaRanks=(routerJudge.current?.positionDetail||[]).map(a=>DIGITS.map(d=>({digit:d,points:Number(a?.[d]||0)})).sort((x,y)=>y.points-x.points||x.digit-y.digit));
+    voteRank('meta-position',metaRanks,.66);
+  }
+  candidate.crossRouterPositionConsensus={votes:positionVotes.map(v=>({points:v.points,families:[...v.families],positions:[...v.positions],details:v.details.slice()}))};
+  const crossValue=d=>{const v=positionVotes[d];return v.points+.28*Math.min(1,v.families.size/3)+.16*Math.min(1,v.positions.size/2)+.14*(score[d]/maxDecision)+.10*((emergence?.score?.[d]||0)/maxEmergence);};
+  const incomingCross=DIGITS.filter(d=>!selected.includes(d)).map(d=>({digit:d,v:positionVotes[d],value:crossValue(d)}))
+    .filter(x=>(x.v.families.size>=3&&x.v.points>=1.60)||(x.v.families.size>=2&&x.v.positions.size>=2&&x.v.points>=2.10))
+    .sort((a,b)=>b.value-a.value||b.v.families.size-a.v.families.size||a.digit-b.digit)[0];
+  if(incomingCross){
+    const incoming=incomingCross.digit,protectedTop=new Set(topCoverage.slice(0,2));
+    const victims=selected.filter(d=>!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&d!==incoming)
+      .sort((a,b)=>crossValue(a)-crossValue(b)||(positionCore.has(a)?1:0)-(positionCore.has(b)?1:0)||(score[a]||0)-(score[b]||0));
+    for(const victim of victims){
+      const vv=positionVotes[victim],breadthWin=incomingCross.v.families.size>vv.families.size||incomingCross.v.positions.size>vv.positions.size;
+      if(positionCore.has(victim)&&incomingCross.v.families.size<3)continue;
+      if(incomingCross.value<crossValue(victim)+(breadthWin?.06:.18))continue;
+      const projected=selected.filter(d=>d!==victim).concat(incoming);
+      if(projected.filter(d=>latestLookup.has(d)).length>carryCap)continue;
+      if(topCoverageSet.size&&projected.filter(d=>topCoverageSet.has(d)).length<quorumTarget)continue;
+      selected[selected.indexOf(victim)]=incoming;crossPositionPromoted.push(incoming);frontierProtected.add(incoming);swapNotes.push(`${victim}→${incoming} (position quorum)`);break;
+    }
+  }
+
+  // V12.0 Carry-Role Balance.
+  // Hard cap tetap maksimum. Satu carry yang terbuang hanya boleh kembali bila carry-router ACTIVE,
+  // role source-position kuat, dan ada bukti kedua dari posisi/emergence. Tidak ada pengisian kuota otomatis.
+  const carryRolePromoted=[];
+  if(routerJudge?.status==='ACTIVE'&&(routerJudge.stats?.carry?.avg||0)>=.55){
+    const carryNow=selected.filter(d=>latestLookup.has(d)).length,carryScore=routerJudge.current?.carry||Array(10).fill(0);
+    const carryIncoming=latestSet.filter(d=>!selected.includes(d)).map(d=>({digit:d,norm:Number(carryScore[d]||0),v:positionVotes[d]}))
+      .filter(x=>x.norm>=.62&&(x.v.families.size>=1||(emergence?.status?.[x.digit]==='ACTIVE'&&(emergence?.rank||[]).find(r=>r.digit===x.digit)?.norm>=.72)))
+      .sort((a,b)=>b.norm-a.norm||b.v.points-a.v.points||a.digit-b.digit)[0];
+    if(carryIncoming&&carryNow<carryCap){
+      const protectedTop=new Set(topCoverage.slice(0,2));
+      const victims=selected.filter(d=>!latestLookup.has(d)&&!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&!positionCore.has(d))
+        .sort((a,b)=>crossValue(a)-crossValue(b)||(score[a]||0)-(score[b]||0));
+      for(const victim of victims){
+        const projected=selected.filter(d=>d!==victim).concat(carryIncoming.digit);
+        if(topCoverageSet.size&&projected.filter(d=>topCoverageSet.has(d)).length<quorumTarget)continue;
+        const carryUtility=.58*carryIncoming.norm+.24*Math.min(1,carryIncoming.v.points/1.5)+.18*emergenceValue(carryIncoming.digit);
+        if(carryUtility<.78*crossValue(victim))continue;
+        selected[selected.indexOf(victim)]=carryIncoming.digit;carryRolePromoted.push(carryIncoming.digit);frontierProtected.add(carryIncoming.digit);swapNotes.push(`${victim}→${carryIncoming.digit} (carry role)`);break;
+      }
+    }
+  }
+
+  // Meta ensemble rescue hanya jika benar-benar ACTIVE dan sedikitnya tiga router setuju.
+  const metaPromoted=[];
+  if(routerJudge?.status==='ACTIVE'){
+    const incoming=routerJudge.rank?.find(x=>!selected.includes(x.digit)&&x.consensus>=3&&x.norm>=.58);
+    if(incoming){
+      const protectedTop=new Set(topCoverage.slice(0,2));
+      const victims=selected.filter(d=>!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&!positionCore.has(d))
+        .sort((a,b)=>(routerJudge.ensemble?.[a]||0)-(routerJudge.ensemble?.[b]||0)||crossValue(a)-crossValue(b));
+      for(const victim of victims){
+        if(incoming.norm<(routerJudge.ensemble?.[victim]||0)+.10)continue;
+        const projected=selected.filter(d=>d!==victim).concat(incoming.digit);
+        if(projected.filter(d=>latestLookup.has(d)).length>carryCap)continue;
+        if(topCoverageSet.size&&projected.filter(d=>topCoverageSet.has(d)).length<quorumTarget)continue;
+        selected[selected.indexOf(victim)]=incoming.digit;metaPromoted.push(incoming.digit);frontierProtected.add(incoming.digit);swapNotes.push(`${victim}→${incoming.digit} (router judge)`);break;
+      }
+    }
+  }
+
   // Final omission audit: strongest excluded dibandingkan dengan weakest included, tanpa lebih dari dua swap tambahan.
   const excluded=DIGITS.filter(d=>!selected.includes(d)).sort((a,b)=>emergenceValue(b)-emergenceValue(a)||(score[b]||0)-(score[a]||0));
   if(swapNotes.length<2&&excluded.length){
@@ -8947,8 +9066,8 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     carryCap,carryUsed:finalCarry,carryExpected:carryBudget.expected,carryPreferred:carryBudget.preferred,
     emergenceTop:(emergence?.rank||[]).slice(0,6),
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
-    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,
-    note:`V11.8: carry cap adalah maksimum, bukan kuota. Exact-position rescue dibatasi satu slot; source dengan twin berdampingan boleh membuka maksimal dua macro-family frontier bila champion replay lintas-depth tidak terwakili. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
+    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,crossPositionPromoted,carryRolePromoted,metaPromoted,
+    note:`V12.0: carry cap adalah maksimum, bukan kuota. Router Judge hanya boleh rescue bila ACTIVE.  Exact-position rescue dibatasi satu slot; source dengan twin berdampingan boleh membuka maksimal dua macro-family frontier bila champion replay lintas-depth tidak terwakili. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
   };
   return selected;
 }
@@ -8962,6 +9081,9 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   const add=d=>{d=Number(d);if(Number.isInteger(d)&&!selected.includes(d)&&final.includes(d)&&selected.length<5)selected.push(d);};
   // V11.8: macro-family frontier adalah bukti diversifikasi yang paling mudah hilang,
   // sehingga ditempatkan lebih dahulu di lima terkuat.
+  (candidate?.decisionEngine?.metaPromoted||[]).forEach(add);
+  (candidate?.decisionEngine?.carryRolePromoted||[]).forEach(add);
+  (candidate?.decisionEngine?.crossPositionPromoted||[]).forEach(add);
   (candidate?.decisionEngine?.familyFrontierPromoted||[])
     .slice().sort((a,b)=>(b.gap*b.quality)-(a.gap*a.quality)||b.hits-a.hits||a.digit-b.digit)
     .forEach(x=>add(x.digit));
@@ -8969,6 +9091,8 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   (candidate?.decisionEngine?.exactPositionPromoted||[])
     .slice().sort((a,b)=>(b.points*b.margin)-(a.points*a.margin)||a.position-b.position)
     .forEach(x=>add(x.digit));
+  // Promosi yang sudah lolos replay dijaga sebelum wakil posisi umum.
+  (candidate?.decisionEngine?.emergencePromoted||[]).slice(0,2).forEach(add);
   // Jaga top-1 posisi berdasarkan confidence margin, bukan urutan A→K→L→E.
   const positionLeaders=(historyCtx?.posRank||[]).map((r,p)=>{
     const top=r?.[0],second=r?.[1];
@@ -8977,8 +9101,6 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
     return {position:p,digit:top.digit,points:Number(top.points||0),margin};
   }).filter(Boolean).sort((a,b)=>b.margin-a.margin||b.points-a.points||a.position-b.position);
   positionLeaders.forEach(x=>add(x.digit));
-  // Promosi broad/precision tetap dibaca, tetapi tidak boleh menutup semua wakil posisi.
-  (candidate?.decisionEngine?.emergencePromoted||[]).forEach(add);
   // Tambahkan suara transformasi terkuat yang benar-benar masuk final.
   (emergence?.rank||[]).filter(x=>x.status!=='AUDIT-ONLY'&&final.includes(x.digit)).slice(0,2).forEach(x=>add(x.digit));
   // Lengkapi dengan decision score, lalu coverage sebagai tie-breaker.
@@ -8991,7 +9113,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V11.8: scanner gate → exact-position rescue → twin-release family frontier → carry abstention → omission rotor',
+    title:'Decision Engine V12.0: scanner gate → walk-forward judge → position/carry quorum → repeat-shape calibration',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -8999,6 +9121,7 @@ function buildDecisionEngineAudit(audit){
     carry:`${audit.carryUsed ?? '-'} / batas ${audit.carryCap ?? '-'} • expected ${Number(audit.carryExpected||0).toFixed(2)} • preferred ${audit.carryPreferred ?? '-'}`,
     gate:`${(audit.gateAllowed || []).length} lolos; ${(audit.gateBlocked || []).length} diblokir`,
     familyFrontier:(audit.familyFrontierPromoted||[]).map(x=>`${x.victim}→${x.digit} via ${x.family} (${Math.round(100*x.gap)}% gap, ${x.hits} hit)`).join(' | ') || 'tidak aktif',
+    routerRescue:[...(audit.crossPositionPromoted||[]).map(d=>`position ${d}`),...(audit.carryRolePromoted||[]).map(d=>`carry ${d}`),...(audit.metaPromoted||[]).map(d=>`meta ${d}`)].join(' | ') || 'tidak aktif',
     note:audit.note || ''
   };
 }
@@ -9641,12 +9764,32 @@ function forceAKLEMiddleRescue(selected, akle, candidate){
   selected[selected.indexOf(victim)] = rescue;
 }
 
+function buildRepeatShapeCalibration(candidate,allowedDigits,akle){
+  const allowed=uniqueDigits(allowedDigits||[]),transitions=candidate?.walkForwardRouterJudge?.transitions||[];
+  if(!allowed.length||transitions.length<4)return null;
+  const pos=Array.from({length:4},()=>Array(10).fill(0)),weights=Array(4).fill(0);
+  const addPosition=(arrays,factor=1)=>{(arrays||[]).forEach((arr,p)=>{if(!arr||p>=4)return;const vals=arr.map(x=>typeof x==='object'?Number(x.points||0):Number(x||0)),max=Math.max(1,...vals);DIGITS.forEach(d=>pos[p][d]+=factor*(vals[d]||0)/max);weights[p]+=factor;});};
+  addPosition(candidate?.targetFullHistoryCoverageBalanceBridgeContext?.posRank,1);
+  addPosition(candidate?.sourceTransformEmergenceProfile?.positionScore,.82);
+  if(candidate?.walkForwardRouterJudge?.status==='ACTIVE')addPosition(candidate.walkForwardRouterJudge.current?.positionDetail,.60);
+  const pairArrays=Array.from({length:4},()=>Array(10).fill(0));
+  (akle?.ak||[]).slice(0,4).forEach((x,i)=>{const q=String(x.pair||'');if(/^\d{2}$/.test(q)){pairArrays[0][Number(q[0])]+=4-i;pairArrays[1][Number(q[1])]+=4-i;}});
+  (akle?.le||[]).slice(0,4).forEach((x,i)=>{const q=String(x.pair||'');if(/^\d{2}$/.test(q)){pairArrays[2][Number(q[0])]+=4-i;pairArrays[3][Number(q[1])]+=4-i;}});
+  addPosition(pairArrays,.62);
+  pos.forEach((a,p)=>{const den=Math.max(.01,weights[p]);a.forEach((v,d)=>a[d]=v/den);});
+  const shapes=[{shape:'AK',p:[0,1]},{shape:'KL',p:[1,2]},{shape:'LE',p:[2,3]},{shape:'AE',p:[0,3]},{shape:'AL',p:[0,2]},{shape:'KE',p:[1,3]}],out=[];
+  const totalW=transitions.reduce((z,tr,i)=>z+.78+.44*(i+1)/transitions.length,0);
+  shapes.forEach(sh=>{let repeatW=0,raw=0;const digitW=Array(10).fill(0);transitions.forEach((tr,i)=>{const d=tr.target?.digits||[],w=.78+.44*(i+1)/transitions.length;if(d.length<4||d[sh.p[0]]!==d[sh.p[1]])return;repeatW+=w;raw++;digitW[d[sh.p[0]]]+=w;});const rate=repeatW/Math.max(1e-9,totalW);allowed.forEach(d=>{const ps=(pos[sh.p[0]][d]+pos[sh.p[1]][d])/2,dr=digitW[d]/Math.max(1e-9,totalW),points=.46*ps+.36*dr+.18*rate;out.push({digit:d,shape:sh.shape,positions:sh.p,points,posSupport:ps,digitRate:dr,shapeRate:rate,rawCount:raw});});});
+  out.sort((a,b)=>b.points-a.points||b.rawCount-a.rawCount||a.digit-b.digit);const top=out[0],second=out.find(x=>x.digit!==top?.digit||x.shape!==top?.shape);if(!top)return null;const margin=top.points/Math.max(1e-6,second?.points||top.points),confidence=top.points*Math.min(1.30,margin);const eligible=(top.rawCount>=2&&top.shapeRate>=.22&&top.posSupport>=.42)||(top.rawCount>=1&&top.posSupport>=.76&&top.digitRate>=.09&&confidence>=.50);return {...top,margin,confidence,eligible,runnerUp:second||null};
+}
+
 function chooseTwinDigit(candidate, finalDigits, latest, akle){
   const ranked = buildTwinLabScores(candidate, finalDigits, latest);
   const a = latest?.digits || [];
   const allowed = uniqueDigits(finalDigits);
   const counts = countMap(a);
   const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
+  const repeatShapeCalibration=buildRepeatShapeCalibration(candidate,allowed,akle);
   const root = digitalRoot(sumDigits(latest));
   const profile = candidate.twinCycleProfile || {};
   const market = candidate.marketProfile || {};
@@ -9665,6 +9808,7 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
     add(d, 0.22*(rankMap[d]?.points || 0), 'twin lab score seimbang');
     if(allowed.includes(d)) add(d, 180, 'masuk 6 digit formula');
   });
+  if(repeatShapeCalibration?.eligible)add(repeatShapeCalibration.digit,Math.round(6600*Math.min(1,repeatShapeCalibration.confidence/.62)),`V12 repeat-shape ${repeatShapeCalibration.shape}`);
 
   // V7.7: Twin repeat gate dari pasangan AK/LE teratas.
   // Jika AK dan LE terkuat mengulang digit yang sama, kandidat kembar harus membaca pengulangan posisi,
@@ -9841,6 +9985,9 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   if(chosen == null && boundaryRootTwin != null && allowed.includes(boundaryRootTwin) && ((candidate.targetBoundaryRootTwinBridgeTwinScore || [])[boundaryRootTwin] || 0) >= 2600){
     chosen = boundaryRootTwin;
   }
+  if(repeatShapeCalibration?.eligible&&allowed.includes(repeatShapeCalibration.digit)&&repeatShapeCalibration.confidence>=.36){
+    chosen=repeatShapeCalibration.digit;
+  }
   const replayTwinTop = DIGITS
     .filter(d => allowed.includes(d))
     .map(d => ({digit:d, points:candidate.replayProfile?.twinScore?.[d] || 0}))
@@ -9872,7 +10019,8 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
     chosen,
     ranked: sorted.map(x => ({digit:x.digit, points:x.points, reasons:x.reasons})),
     cooldown:candidate.twinCooldown,
-    decision:'V7.7 twin gate: operasi aktif + repeat AK/LE; hasil kembar wajib dari 6 digit formula'
+    repeatShapeCalibration,
+    decision:`V12.0 repeat-shape ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; kandidat kembar wajib berasal dari 6 digit dan melewati replay posisi.`
   };
   return chosen;
 }
@@ -10316,7 +10464,7 @@ function buildSlowStages(rows){
     {title:'Tahap 3 • Replay seluruh transisi', icon:'③', delay:760, desc:`Menguji formula pada seluruh transisi historis. Formula yang hanya cocok sekali tidak boleh memaksa hasil.`, items:[`${Math.max(0,rows.length-1)} transisi tersedia untuk replay`,`Target hari ${targetDay}: ${allTargetAnchors.length} anchor ditemukan di seluruh kedalaman`]},
     {title:'Tahap 4 • Mining formula per posisi', icon:'④', delay:820, desc:'Mencari formula A, K, L, dan E dari seluruh kedalaman anchor; termasuk tambah, selisih, produk, mirror, root, dan offset golden sebagai kandidat uji.', items:weekPairs.slice(0,8)},
     {title:'Tahap 5 • Balance latest & twin', icon:'⑤', delay:680, desc:'Menurunkan digit latest yang tidak punya bukti sejarah luas dan menguji kandidat kembar dari seluruh ladder hari target.', items:['Latest boleh lolos hanya bila didukung scan.','Kembar dipilih dari bukti historis, bukan pengulangan terbaru semata.']},
-    {title:'Tahap 6 • Router keputusan', icon:'⑥', delay:520, desc:'Menggabungkan formula yang lolos validasi, menyusun AKLE, lalu memilih 6 digit dan 5 digit terkuat.', items:['Tidak ada force-rescue setelah keputusan final.']}
+    {title:'Tahap 6 • Walk-forward router judge', icon:'⑥', delay:560, desc:'Menguji frequency, position, transform, dan carry router secara out-of-sample sebelum menyusun 6 digit, lima terkuat, AKLE, dan repeat.', items:['Hanya router ACTIVE yang boleh melakukan rescue.','TIE-BREAKER dan AUDIT-ONLY tidak boleh memaksa hasil.']}
   ];
 }
 
@@ -10497,8 +10645,9 @@ function renderResult(r){
   const targetAnchorZeroFrontEchoMirrorBridgeHtml = r.audit.targetAnchorZeroFrontEchoMirrorBridge ? `<div><b>Target anchor-zero front-echo mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.ak)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.le)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontCarryAnchorTwinBridgeHtml = r.audit.targetFrontCarryAnchorTwinBridge ? `<div><b>Target front-carry anchor-twin bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.ak)}${r.audit.targetFrontCarryAnchorTwinBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.le)}${r.audit.targetFrontCarryAnchorTwinBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altLE) : ''}</li></ul></div>` : '';
   const formulaGateHtml = r.audit.formulaGate ? `<div><b>Scanner Formula Gate</b><ul class="process-list small"><li>${escapeHtml(r.audit.formulaGate.title)}</li><li><b>Lolos</b></li>${(r.audit.formulaGate.allowed || []).slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Tidak ada bridge lama yang lolos; scanner-native mengambil alih.</li>'}<li><b>Diblokir</b></li>${(r.audit.formulaGate.blocked || []).slice(0,6).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>-</li>'}</ul></div>` : '';
-  const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence V11.8</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
-  const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>Coverage / emergence: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li><li>Twin-release family frontier: ${escapeHtml(r.audit.decisionEngine.familyFrontier || 'tidak aktif')}</li><li>Carry budget: ${escapeHtml(r.audit.decisionEngine.carry || '-')}</li><li>Formula gate: ${escapeHtml(r.audit.decisionEngine.gate || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
+  const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
+  const routerJudgeHtml = r.audit.walkForwardRouterJudge ? `<div><b>Walk-Forward Router Judge</b><ul class="process-list small"><li>${escapeHtml(r.audit.walkForwardRouterJudge.title)}</li>${(r.audit.walkForwardRouterJudge.routers||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.walkForwardRouterJudge.result||'')}</li>${(r.audit.walkForwardRouterJudge.top||[]).slice(0,6).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
+  const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>Coverage / emergence: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li><li>Router rescue: ${escapeHtml(r.audit.decisionEngine.routerRescue || 'tidak aktif')}</li><li>Twin-release family frontier: ${escapeHtml(r.audit.decisionEngine.familyFrontier || 'tidak aktif')}</li><li>Carry budget: ${escapeHtml(r.audit.decisionEngine.carry || '-')}</li><li>Formula gate: ${escapeHtml(r.audit.decisionEngine.gate || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
@@ -10566,6 +10715,7 @@ function renderResult(r){
       ${targetFrontCarryAnchorTwinBridgeHtml}
       ${formulaGateHtml}
       ${emergenceHtml}
+      ${routerJudgeHtml}
       ${decisionEngineHtml}
       ${worldReplayHtml}
       ${marketHtml}
@@ -10579,7 +10729,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V11.8 memakai Full-History Gate + Exact-Position Rescue + Twin-Release Macro-Family Frontier + Carry Abstention: seluruh riwayat dipindai tertua ke terbaru; bila source memiliki twin berdampingan dan riwayat target mendukung repeat, maksimal dua champion keluarga transformasi yang belum terwakili boleh masuk tanpa merusak coverage quorum maupun carry cap.</p>
+      <p class="tagline">Engine V12.0 memulai dari full-history scan, lalu menguji router frequency, position, transform, dan carry secara walk-forward. Hanya router ACTIVE yang boleh melakukan rescue; TIE-BREAKER hanya untuk audit, dan repeat/kembar dikalibrasi menurut bentuk posisi target-day.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
