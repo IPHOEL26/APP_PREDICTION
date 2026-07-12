@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V11.6 • Emergence Replay + Carry Abstention + Omission Portfolio';
+const APP_VERSION = 'IPHOEL Formula Engine V11.7 • Exact-Position Emergence Rescue + Carry Abstention';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -170,7 +170,7 @@ function buildFormulaPrediction(inputRows){
   applyTargetFullHistoryScannerRouterBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
   // V11.1: mining formula per posisi dan depth-balance berjalan setelah scanner utama.
   applyTargetFullHistoryCoverageBalanceBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
-  // V11.6: source/latest hanya boleh masuk melalui transformasi yang direplay pada transisi hari yang sama.
+  // V11.7: source/latest hanya boleh masuk melalui transformasi yang direplay pada transisi hari yang sama.
   // Raw carry tidak dihitung sebagai transformasi dan carry cap tidak pernah dianggap kuota.
   applySourceTransformEmergencePortfolio(candidate, rows, latest, targetDay);
   // V11.1: scanner sekarang menjadi gate. Bridge lama belum boleh memberi pengaruh sebelum lolos replay.
@@ -8425,7 +8425,7 @@ function buildTargetTailZeroCenterTwinAnchorSumBridgeAudit(audit){
 
 
 
-// V11.6: Source-Transform Emergence Portfolio.
+// V11.7: Source-Transform Emergence Portfolio + Exact-Position Rescue.
 // Semua formula di bawah bersifat umum dan direplay pada transisi source-day → target-day.
 // Tidak ada digit, market, atau hasil aktual yang dikunci di dalam kode.
 function sourceTransformMacroFamily(key){
@@ -8493,7 +8493,9 @@ function buildSourceTransformEmergenceProfile(rows,latest,targetDay){
   const score=Array(10).fill(0), precision=Array(10).fill(0), familyCount=Array(10).fill(0);
   const status=Array(10).fill('AUDIT-ONLY'), notes=Array.from({length:10},()=>[]);
   const positionScore=Array.from({length:4},()=>Array(10).fill(0));
-  if(transitions.length<4)return {transitions,score,precision,familyCount,status,notes,positionScore,rank:[],positionRank:[[],[],[],[]],active:false};
+  const positionFamilyCount=Array.from({length:4},()=>Array(10).fill(0));
+  const positionBestHits=Array.from({length:4},()=>Array(10).fill(0));
+  if(transitions.length<4)return {transitions,score,precision,familyCount,status,notes,positionScore,positionFamilyCount,positionBestHits,rank:[],positionRank:[[],[],[],[]],active:false};
   const stats={};
   transitions.forEach((tr,index)=>{
     const targetSet=new Set(tr.target.digits||[]);
@@ -8544,13 +8546,15 @@ function buildSourceTransformEmergenceProfile(rows,latest,targetDay){
       if(hits<2)return;
       const exact=(hits+1)/(x.trials+2);
       positionScore[p][d]+=Math.round(52000*exact*(x.quality+0.35));
+      positionFamilyCount[p][d]+=1;
+      positionBestHits[p][d]=Math.max(positionBestHits[p][d],hits);
     }));
   });
   const maxScore=Math.max(1,...score),maxPrecision=Math.max(1,...precision);
   const rank=DIGITS.map(d=>({digit:d,points:score[d],norm:score[d]/maxScore,precision:precision[d],precisionNorm:precision[d]/maxPrecision,status:status[d],families:familyCount[d],notes:notes[d]}))
     .sort((a,b)=>b.points-a.points||b.precision-a.precision||a.digit-b.digit);
   const positionRank=positionScore.map(arr=>DIGITS.map(d=>({digit:d,points:arr[d]})).sort((a,b)=>b.points-a.points||a.digit-b.digit));
-  return {transitions,score,precision,familyCount,status,notes,positionScore,rank,positionRank,active:rank.some(x=>x.status!=='AUDIT-ONLY')};
+  return {transitions,score,precision,familyCount,status,notes,positionScore,positionFamilyCount,positionBestHits,rank,positionRank,active:rank.some(x=>x.status!=='AUDIT-ONLY')};
 }
 
 function applySourceTransformEmergencePortfolio(candidate,rows,latest,targetDay){
@@ -8564,7 +8568,7 @@ function applySourceTransformEmergencePortfolio(candidate,rows,latest,targetDay)
     if((profile.score[d]||0)>0)addCandidateTrace(candidate,d,profile.score[d],`Source-transform ${profile.status[d]}: ${(profile.notes[d]||[]).slice(0,2).join(', ')}`,'sourceTransformEmergence');
   });
   candidate.sourceTransformEmergenceAudit={
-    title:`V11.6 source-transform replay: ${profile.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'}`,
+    title:`V11.7 source-transform replay: ${profile.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'}`, 
     top:profile.rank.slice(0,8).map(x=>`${x.digit}:${Math.round(x.points)} • ${x.status} • ${x.notes.slice(0,2).join(', ')}`),
     detail:'Raw source tidak dihitung sebagai transformasi. ACTIVE/TIE-BREAKER boleh ikut omission portfolio; AUDIT-ONLY tidak boleh memaksa hasil.'
   };
@@ -8582,7 +8586,10 @@ function sourceTransformEmergencePairSeeds(candidate,kind){
   const out=[];
   p.positionRank[left].slice(0,3).forEach((a,ia)=>p.positionRank[right].slice(0,3).forEach((b,ib)=>{
     if(a.points<=0||b.points<=0)return;
-    out.push({pair:`${a.digit}${b.digit}`,width:2,bonus:Math.round(9000+0.16*(a.points+b.points)-900*(ia+ib)),label:`V11.6 source-transform position ${kind}`});
+    const leftFamilies=p.positionFamilyCount?.[left]?.[a.digit]||0;
+    const rightFamilies=p.positionFamilyCount?.[right]?.[b.digit]||0;
+    const exactBonus=2200*Math.min(2,leftFamilies)+2200*Math.min(2,rightFamilies);
+    out.push({pair:`${a.digit}${b.digit}`,width:2,bonus:Math.round(11000+0.18*(a.points+b.points)+exactBonus-900*(ia+ib)),label:`V11.7 source-transform exact-position ${kind}`});
   }));
   return out.sort((a,b)=>b.bonus-a.bonus||a.pair.localeCompare(b.pair)).slice(0,6);
 }
@@ -8670,7 +8677,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const scannerRank=DIGITS.slice().sort((a,b)=>((candidate.targetFullHistoryScannerRouterBridgeScore||[])[b]||0)-((candidate.targetFullHistoryScannerRouterBridgeScore||[])[a]||0)||(score[b]||0)-(score[a]||0)||a-b);
   let scannerAdded=0;
   scannerRank.forEach(d=>{if(scannerAdded>=2)return;if(((candidate.targetFullHistoryScannerRouterBridgeScore||[])[d]||0)<=0)return;if(addSelected(d))scannerAdded++;});
-  // V11.6: tidak ada tahap yang otomatis mengisi carry. Slot tersisa diisi ranking gated saja.
+  // V11.7: tidak ada tahap yang otomatis mengisi carry. Slot tersisa diisi ranking gated saja.
   ranked.forEach(x=>{if(selected.length<6)addSelected(x.digit);});
   ranked.forEach(x=>{if(selected.length<6&&!selected.includes(x.digit))selected.push(x.digit);});
 
@@ -8700,6 +8707,24 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
       if(victim==null)break;selected[selected.indexOf(victim)]=incoming;quorumCount++;notes.push(`${victim}→${incoming}`);
     }
     coverageDecision=notes.length?`coverage quorum ${notes.join(', ')} (${quorumCount}/${quorumTarget})`:`coverage quorum terpenuhi ${quorumCount}/${quorumTarget}`;
+  }
+
+  // V11.7: exact-position emergence leaders.
+  // Sebuah digit hanya dilindungi bila menjadi pemimpin posisi dengan margin jelas,
+  // didukung sedikitnya dua keluarga transformasi independen, dan replay exact-position >=2.
+  const emergencePositionLeaders=[];
+  if(emergence?.positionRank?.length){
+    emergence.positionRank.forEach((rank,p)=>{
+      const top=rank?.[0],second=rank?.[1];
+      if(!top||top.points<=0)return;
+      const d=Number(top.digit);
+      const families=Number(emergence.positionFamilyCount?.[p]?.[d]||0);
+      const bestHits=Number(emergence.positionBestHits?.[p]?.[d]||0);
+      const margin=top.points/Math.max(1,Number(second?.points||0));
+      const st=emergence.status?.[d]||'AUDIT-ONLY';
+      if(st==='AUDIT-ONLY'||families<2||bestHits<2||margin<1.18)return;
+      emergencePositionLeaders.push({position:p,digit:d,points:top.points,margin,families,bestHits,status:st});
+    });
   }
 
   const carryCounts=profile.carryDigitCounts||[];
@@ -8744,6 +8769,38 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
       if(!carryRelease&&incomingValue<victimValue*0.82&&!precisionAdvance)return;
       selected[selected.indexOf(victim)]=incoming;emergencePromoted.push(incoming);swapNotes.push(`${victim}→${incoming} (${incomingObj.status.toLowerCase()})`);
     });
+  }
+
+  // Exact-position emergence rescue: maksimal satu digit unik yang belum terwakili.
+  // Ini bukan force-fit: rescue wajib mempertahankan carry cap dan coverage quorum,
+  // serta harus mengalahkan exact-position support kandidat korban dengan margin jelas.
+  const exactPositionPromoted=[];
+  if(emergencePositionLeaders.length){
+    const leaderPool=emergencePositionLeaders
+      .filter(x=>!selected.includes(x.digit))
+      .sort((a,b)=>(b.points*b.margin)-(a.points*a.margin)||b.families-a.families||a.digit-b.digit);
+    const leader=leaderPool[0];
+    if(leader){
+      const exactSupport=d=>Math.max(...(emergence.positionScore||[]).map(a=>Number(a?.[d]||0)),0);
+      const protectedTop=new Set(topCoverage.slice(0,2));
+      const candidates=selected.filter(d=>!positionCore.has(d)&&!protectedTop.has(d)&&d!==leader.digit)
+        .sort((a,b)=>exactSupport(a)-exactSupport(b)||emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0));
+      const victim=candidates[0];
+      if(victim!=null){
+        const projected=selected.filter(d=>d!==victim).concat(leader.digit);
+        const carryOk=projected.filter(d=>latestLookup.has(d)).length<=carryCap;
+        const quorumOk=!topCoverageSet.size||projected.filter(d=>topCoverageSet.has(d)).length>=quorumTarget;
+        const victimExact=exactSupport(victim);
+        const exactWin=leader.points>=Math.max(18000,victimExact*1.18);
+        const replayWin=leader.families>=2&&leader.bestHits>=2;
+        if(carryOk&&quorumOk&&exactWin&&replayWin){
+          selected[selected.indexOf(victim)]=leader.digit;
+          emergencePromoted.push(leader.digit);
+          exactPositionPromoted.push(leader);
+          swapNotes.push(`${victim}→${leader.digit} (exact-pos ${['A','K','L','E'][leader.position]})`);
+        }
+      }
+    }
   }
 
   // Carry portfolio arbitration: hanya aktif bila posterior membuka kemungkinan dua carry
@@ -8825,8 +8882,8 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     carryCap,carryUsed:finalCarry,carryExpected:carryBudget.expected,carryPreferred:carryBudget.preferred,
     emergenceTop:(emergence?.rank||[]).slice(0,6),
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
-    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),
-    note:`V11.6: carry cap adalah maksimum, bukan kuota. Source-transform direplay dan didedup; final memakai kuorum coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
+    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,
+    note:`V11.7: carry cap adalah maksimum, bukan kuota. Exact-position emergence hanya boleh rescue satu slot bila margin, keluarga independen, carry cap, dan coverage quorum lolos; final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
   };
   return selected;
 }
@@ -8842,8 +8899,15 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   (candidate?.decisionEngine?.emergencePromoted||[]).forEach(add);
   // Tambahkan suara transformasi terkuat yang benar-benar masuk final.
   (emergence?.rank||[]).filter(x=>x.status!=='AUDIT-ONLY'&&final.includes(x.digit)).slice(0,2).forEach(x=>add(x.digit));
-  // Jaga top-1 posisi agar lima digit tidak kehilangan struktur A/K/L/E.
-  (historyCtx?.posRank||[]).forEach(r=>{if(r?.[0])add(r[0].digit);});
+  // Jaga top-1 posisi berdasarkan confidence margin, bukan urutan A→K→L→E.
+  // Posisi dengan leader yang unggul jelas atas runner-up mendapat prioritas lebih tinggi.
+  const positionLeaders=(historyCtx?.posRank||[]).map((r,p)=>{
+    const top=r?.[0],second=r?.[1];
+    if(!top)return null;
+    const margin=Number(top.points||0)/Math.max(1,Number(second?.points||0));
+    return {position:p,digit:top.digit,points:Number(top.points||0),margin};
+  }).filter(Boolean).sort((a,b)=>b.margin-a.margin||b.points-a.points||a.position-b.position);
+  positionLeaders.forEach(x=>add(x.digit));
   // Lengkapi dengan decision score, lalu coverage sebagai tie-breaker.
   final.slice().sort((a,b)=>(score[b]||0)-(score[a]||0)||((historyCtx?.coverage||[])[b]||0)-((historyCtx?.coverage||[])[a]||0)||a-b).forEach(add);
   candidate.strongFiveDigits=selected;
@@ -8854,7 +8918,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V11.6: full-history gate → source-transform replay → carry abstention → coverage/emergence omission rotor',
+    title:'Decision Engine V11.7: scanner gate → source-transform replay → exact-position rescue → carry abstention → omission rotor',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -9841,7 +9905,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(targetDeepWeekdayCycleBalanceBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target deep weekday cycle balance bridge');
   pushSeeds(targetFullHistoryScannerRouterBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target full-history scanner router bridge');
   pushSeeds(targetFullHistoryCoverageBalanceBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target full-history position scanner');
-  pushSeeds(sourceTransformEmergencePairSeeds(candidate, kind), 0, 'V11.6 source-transform position replay');
+  pushSeeds(sourceTransformEmergencePairSeeds(candidate, kind), 0, 'V11.7 source-transform exact-position replay');
   pushSeeds(targetFrontCarryAnchorTwinBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target front-carry anchor-twin bridge');
   pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
@@ -10359,7 +10423,7 @@ function renderResult(r){
   const targetAnchorZeroFrontEchoMirrorBridgeHtml = r.audit.targetAnchorZeroFrontEchoMirrorBridge ? `<div><b>Target anchor-zero front-echo mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.ak)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.le)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontCarryAnchorTwinBridgeHtml = r.audit.targetFrontCarryAnchorTwinBridge ? `<div><b>Target front-carry anchor-twin bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.ak)}${r.audit.targetFrontCarryAnchorTwinBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.le)}${r.audit.targetFrontCarryAnchorTwinBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altLE) : ''}</li></ul></div>` : '';
   const formulaGateHtml = r.audit.formulaGate ? `<div><b>Scanner Formula Gate</b><ul class="process-list small"><li>${escapeHtml(r.audit.formulaGate.title)}</li><li><b>Lolos</b></li>${(r.audit.formulaGate.allowed || []).slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Tidak ada bridge lama yang lolos; scanner-native mengambil alih.</li>'}<li><b>Diblokir</b></li>${(r.audit.formulaGate.blocked || []).slice(0,6).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>-</li>'}</ul></div>` : '';
-  const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence V11.6</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
+  const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence V11.7</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
   const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>Coverage / emergence: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li><li>Carry budget: ${escapeHtml(r.audit.decisionEngine.carry || '-')}</li><li>Formula gate: ${escapeHtml(r.audit.decisionEngine.gate || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
@@ -10441,7 +10505,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V11.6 memakai Full-History Gate + Source-Transform Emergence + Carry Abstention + Omission Portfolio: seluruh riwayat dipindai tertua ke terbaru, transformasi source direplay, carry cap diperlakukan sebagai maksimum, dan slot final dibandingkan melalui coverage serta omission cost.</p>
+      <p class="tagline">Engine V11.7 memakai Full-History Gate + Source-Transform Emergence + Exact-Position Rescue + Carry Abstention: seluruh riwayat dipindai tertua ke terbaru, transformasi source direplay, pemimpin posisi emergence hanya boleh menyelamatkan satu slot bila margin dan bukti independennya lolos, lalu final diaudit melalui coverage serta omission cost.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
