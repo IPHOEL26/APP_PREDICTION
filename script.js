@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V12.0 • Walk-Forward Router Judge + Carry-Role Balance + Repeat-Shape Calibration';
+const APP_VERSION = 'IPHOEL Formula Engine V12.1 • Protected Position Core + Active Carry Arbitration + Rescue Budget';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -8641,7 +8641,7 @@ function buildWalkForwardRouterJudgeProfile(rows,latest,targetDay){
   const rank=DIGITS.map(d=>({digit:d,norm:ensemble[d]||0,consensus:consensus[d]})).sort((a,b)=>b.norm-a.norm||b.consensus-a.consensus||a.digit-b.digit);
   return {transitions,validation,stats,current,ensemble,rank,consensus,status,ensembleAvg,baseAvg,bestAvg,improved,worse,flat};
 }
-function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.0 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
+function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.1 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
 function buildWalkForwardRouterJudgeAudit(a){if(!a)return null;return {title:a.title,routers:a.routers,result:a.result,top:a.top};}
 
 function carryBudgetProfile(profile,carryCap){
@@ -8655,6 +8655,20 @@ function carryBudgetProfile(profile,carryCap){
   return {expected,mode,preferred:Math.min(carryCap,mode),probs};
 }
 
+
+function crossPositionUtilityPreview(d,candidate,historyCtx,emergence,akle){
+  d=Number(d);if(!Number.isInteger(d))return 0;
+  let value=0,weight=0;
+  const add=(x,w)=>{x=Number(x)||0;if(x>0){value+=w*x;weight+=w;}};
+  const hr=historyCtx?.posRank||[];
+  hr.forEach(rank=>{const max=Math.max(1,...(rank||[]).map(x=>Number(x.points||0)));const hit=(rank||[]).find(x=>Number(x.digit)===d);if(hit)add(Number(hit.points||0)/max,1);});
+  const er=emergence?.positionRank||[];
+  er.forEach(rank=>{const max=Math.max(1,...(rank||[]).map(x=>Number(x.points||0)));const hit=(rank||[]).find(x=>Number(x.digit)===d);if(hit)add(Number(hit.points||0)/max,0.8);});
+  const pairs=[...(akle?.ak||[]).slice(0,3),...(akle?.le||[]).slice(0,3)];
+  const pairHits=pairs.reduce((z,x)=>z+(String(x.pair||'').includes(String(d))?1:0),0);
+  add(Math.min(1,pairHits/3),0.55);
+  return weight?value/weight:0;
+}
 
 function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const score=Array(10).fill(0);
@@ -8783,6 +8797,15 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const emergenceValue=d=>0.58*((emergence?.score?.[d]||0)/maxEmergence)+0.18*(emergence?.precision?.[d]||0)+0.14*(score[d]/maxDecision)+0.10*((historyCtx?.coverage?.[d]||0)/maxCoverage);
   const swapNotes=[];
   const emergencePromoted=[];
+  const decisionJudge=candidate.walkForwardRouterJudge;
+  const carryJudgeActive=decisionJudge?.status==='ACTIVE'&&(decisionJudge.stats?.carry?.avg||0)>=0.55;
+  // V12.1: seluruh rescue berbagi satu anggaran global. Ini mencegah cascade 3–4 swap
+  // yang dapat membuang kandidat posisi/coverage yang awalnya sudah sehat.
+  const maxFinalSwaps=2;
+  const canSwap=()=>swapNotes.length<maxFinalSwaps;
+  // Top-1 setiap posisi yang sudah terpilih tidak boleh dikorbankan oleh router lain.
+  // Ia tidak dipaksa masuk, tetapi bila sudah masuk dianggap protected core.
+  const strongPositionCore=new Set(positionCore);
 
   // Emergence portfolio: satu kandidat broad + satu kandidat precision, selalu melalui replay dan deduplikasi keluarga.
   if(emergence?.rank?.length){
@@ -8791,7 +8814,9 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     if(eligible[0])picks.push(eligible[0]);
     const precisionPick=eligible.filter(x=>!picks.some(y=>y.digit===x.digit)).sort((a,b)=>b.precisionNorm-a.precisionNorm||b.norm-a.norm||a.digit-b.digit)[0];
     if(precisionPick&&precisionPick.precisionNorm>=0.42)picks.push(precisionPick);
-    picks.slice(0,2).forEach(incomingObj=>{
+    const emergencePickLimit=carryJudgeActive?1:2;
+    picks.slice(0,emergencePickLimit).forEach(incomingObj=>{
+      if(!canSwap())return;
       const incoming=incomingObj.digit;
       const incomingValue=emergenceValue(incoming);
       const carryNow=selected.filter(d=>latestLookup.has(d)).length;
@@ -8825,7 +8850,12 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   // Ini bukan force-fit: rescue wajib mempertahankan carry cap dan coverage quorum,
   // serta harus mengalahkan exact-position support kandidat korban dengan margin jelas.
   const exactPositionPromoted=[];
-  if(emergencePositionLeaders.length){
+  const strongMissingCarryBeforeExact=carryJudgeActive&&latestSet.some(d=>
+    !selected.includes(d)&&Number(decisionJudge.current?.carry?.[d]||0)>=0.72
+  );
+  // Bila carry-role ACTIVE masih mempunyai kandidat kuat yang belum terwakili,
+  // satu slot rescue disimpan untuk carry arbitration agar exact-position tidak menghabiskan budget lebih dulu.
+  if(emergencePositionLeaders.length&&canSwap()&&!strongMissingCarryBeforeExact){
     const leaderPool=emergencePositionLeaders
       .filter(x=>!selected.includes(x.digit))
       .sort((a,b)=>(b.points*b.margin)-(a.points*a.margin)||b.families-a.families||a.digit-b.digit);
@@ -8855,44 +8885,52 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
 
   // Carry portfolio arbitration: hanya aktif bila posterior membuka kemungkinan dua carry
   // DAN dua digit latest mempunyai transformasi replay kuat. Ini bukan kuota; tanpa bukti, tahap dilewati.
-  if(emergence?.rank?.length){
+  if(emergence?.rank?.length&&carryJudgeActive&&canSwap()){
     const emergenceByDigit=Object.fromEntries(emergence.rank.map(x=>[x.digit,x]));
-    const latestRank=latestSet.map(d=>({digit:d,quality:0.30*carryQuality(d)+0.70*(emergenceByDigit[d]?.norm||0),em:emergenceByDigit[d]}))
-      .sort((a,b)=>(b.em?.norm||0)-(a.em?.norm||0)||b.quality-a.quality||a.digit-b.digit);
-    const strongLatest=latestRank.filter(x=>x.em?.status==='ACTIVE'&&(x.em?.norm||0)>=0.72);
-    const allowTwo=carryCap>=2&&carryBudget.expected>=1.30&&strongLatest.length>=2&&(strongLatest[0]?.em?.norm||0)>=0.82;
+    const carryRole=decisionJudge.current?.carry||Array(10).fill(0);
+    const latestRank=latestSet.map(d=>({
+      digit:d,
+      role:Number(carryRole[d]||0),
+      quality:0.54*Number(carryRole[d]||0)+0.24*carryQuality(d)+0.22*(emergenceByDigit[d]?.norm||0),
+      em:emergenceByDigit[d]
+    })).sort((a,b)=>b.quality-a.quality||b.role-a.role||a.digit-b.digit);
+    const strongLatest=latestRank.filter(x=>x.role>=0.72&&x.em?.status!=='AUDIT-ONLY');
+    // Dua carry hanya dibuka bila dua role source-position sama-sama kuat. Bukan karena cap=2.
+    const allowTwo=carryCap>=2&&strongLatest.length>=2&&strongLatest[1].role>=0.72&&
+      (carryBudget.expected>=1.0||(decisionJudge.stats?.carry?.avg||0)>=0.62);
     if(allowTwo){
       const desired=strongLatest.slice(0,2).map(x=>x.digit);
       let current=selected.filter(d=>latestLookup.has(d));
       const missing=desired.filter(d=>!current.includes(d));
-      const unwanted=current.filter(d=>!desired.includes(d)).sort((a,b)=>carryQuality(a)-carryQuality(b));
-      while(missing.length&&unwanted.length){
+      const unwanted=current.filter(d=>!desired.includes(d)&&!strongPositionCore.has(d)&&!emergencePromoted.includes(d))
+        .sort((a,b)=>carryQuality(a)-carryQuality(b));
+      while(canSwap()&&missing.length&&unwanted.length){
         const incoming=missing.shift(),victim=unwanted.shift();
         selected[selected.indexOf(victim)]=incoming;
         emergencePromoted.push(incoming);
-        swapNotes.push(`${victim}→${incoming} (carry-quality)`);
+        swapNotes.push(`${victim}→${incoming} (carry-role rotation)`);
         current=selected.filter(d=>latestLookup.has(d));
       }
       desired.filter(d=>!selected.includes(d)).forEach(incoming=>{
-        if(selected.filter(d=>latestLookup.has(d)).length>=carryCap)return;
-        const protectedTop=new Set(topCoverage.slice(0,2));
-        const coveragePreserving=selected.filter(d=>!latestLookup.has(d)&&!topCoverageSet.has(d)&&!desired.includes(d))
-          .sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0));
-        const victim=coveragePreserving[0]??selected.filter(d=>!latestLookup.has(d)&&!positionCore.has(d)&&!protectedTop.has(d))
-          .sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0))[0];
-        if(victim==null)return;
-        const projected=selected.filter(d=>d!==victim).concat(incoming);
-        if(topCoverageSet.size&&projected.filter(d=>topCoverageSet.has(d)).length<quorumTarget)return;
-        selected[selected.indexOf(victim)]=incoming;
-        emergencePromoted.push(incoming);
-        swapNotes.push(`${victim}→${incoming} (carry-portfolio)`);
+        if(!canSwap()||selected.filter(d=>latestLookup.has(d)).length>=carryCap)return;
+        const activeUtility=d=>0.56*Number(decisionJudge.ensemble?.[d]||0)+0.24*emergenceValue(d)+0.20*crossPositionUtilityPreview(d,candidate,historyCtx,emergence,akle);
+        const victims=selected.filter(d=>!latestLookup.has(d)&&!strongPositionCore.has(d)&&!emergencePromoted.includes(d)&&!desired.includes(d))
+          .sort((a,b)=>activeUtility(a)-activeUtility(b)||(score[a]||0)-(score[b]||0));
+        for(const victim of victims){
+          const projected=selected.filter(d=>d!==victim).concat(incoming);
+          if(topCoverageSet.size&&projected.filter(d=>topCoverageSet.has(d)).length<quorumTarget)continue;
+          selected[selected.indexOf(victim)]=incoming;
+          emergencePromoted.push(incoming);
+          swapNotes.push(`${victim}→${incoming} (carry-role portfolio)`);
+          break;
+        }
       });
     }
   }
 
   // Latest-transform exception: carry tetap bukan kuota, tetapi satu digit latest boleh kembali
   // bila transformasinya menjadi pemimpin replay dan posterior carry masih membuka ruang.
-  if(emergence?.rank?.length&&emergencePromoted.length<2){
+  if(emergence?.rank?.length&&carryJudgeActive&&emergencePromoted.length<2&&canSwap()){
     const carryNow=selected.filter(d=>latestLookup.has(d)).length;
     const latestEmergence=emergence.rank.find(x=>latestLookup.has(x.digit)&&!selected.includes(x.digit)&&x.status==='ACTIVE'&&x.norm>=0.88);
     if(latestEmergence&&carryNow<carryCap&&carryBudget.expected>=carryNow+0.35){
@@ -8936,7 +8974,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
         (x.champion?.bands||[]).length>=2&&(emergence.status?.[d]||'AUDIT-ONLY')!=='AUDIT-ONLY';
     }).sort((a,b)=>(b.gap*b.champion.quality)-(a.gap*a.champion.quality)||b.champion.quality-a.champion.quality||a.champion.digit-b.champion.digit);
     for(const frontier of familyCandidates){
-      if(familyFrontierPromoted.length>=2)break;
+      if(!canSwap()||familyFrontierPromoted.length>=2)break;
       const incoming=Number(frontier.champion.digit);
       const protectedTop=new Set(topCoverage.slice(0,2));
       const victimValue=d=>0.52*((score[d]||0)/maxDecisionSafe)+0.24*((historyCtx?.coverage?.[d]||0)/maxCoverageSafe)+0.16*((emergence?.score?.[d]||0)/maxEmergence)+0.08*(exactSupport(d)/maxExact);
@@ -8988,9 +9026,9 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const incomingCross=DIGITS.filter(d=>!selected.includes(d)).map(d=>({digit:d,v:positionVotes[d],value:crossValue(d)}))
     .filter(x=>(x.v.families.size>=3&&x.v.points>=1.60)||(x.v.families.size>=2&&x.v.positions.size>=2&&x.v.points>=2.10))
     .sort((a,b)=>b.value-a.value||b.v.families.size-a.v.families.size||a.digit-b.digit)[0];
-  if(incomingCross){
+  if(incomingCross&&canSwap()){
     const incoming=incomingCross.digit,protectedTop=new Set(topCoverage.slice(0,2));
-    const victims=selected.filter(d=>!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&d!==incoming)
+    const victims=selected.filter(d=>!strongPositionCore.has(d)&&!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&d!==incoming)
       .sort((a,b)=>crossValue(a)-crossValue(b)||(positionCore.has(a)?1:0)-(positionCore.has(b)?1:0)||(score[a]||0)-(score[b]||0));
     for(const victim of victims){
       const vv=positionVotes[victim],breadthWin=incomingCross.v.families.size>vv.families.size||incomingCross.v.positions.size>vv.positions.size;
@@ -9007,14 +9045,14 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   // Hard cap tetap maksimum. Satu carry yang terbuang hanya boleh kembali bila carry-router ACTIVE,
   // role source-position kuat, dan ada bukti kedua dari posisi/emergence. Tidak ada pengisian kuota otomatis.
   const carryRolePromoted=[];
-  if(routerJudge?.status==='ACTIVE'&&(routerJudge.stats?.carry?.avg||0)>=.55){
+  if(routerJudge?.status==='ACTIVE'&&(routerJudge.stats?.carry?.avg||0)>=.55&&canSwap()){
     const carryNow=selected.filter(d=>latestLookup.has(d)).length,carryScore=routerJudge.current?.carry||Array(10).fill(0);
     const carryIncoming=latestSet.filter(d=>!selected.includes(d)).map(d=>({digit:d,norm:Number(carryScore[d]||0),v:positionVotes[d]}))
       .filter(x=>x.norm>=.62&&(x.v.families.size>=1||(emergence?.status?.[x.digit]==='ACTIVE'&&(emergence?.rank||[]).find(r=>r.digit===x.digit)?.norm>=.72)))
       .sort((a,b)=>b.norm-a.norm||b.v.points-a.v.points||a.digit-b.digit)[0];
     if(carryIncoming&&carryNow<carryCap){
       const protectedTop=new Set(topCoverage.slice(0,2));
-      const victims=selected.filter(d=>!latestLookup.has(d)&&!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&!positionCore.has(d))
+      const victims=selected.filter(d=>!latestLookup.has(d)&&!strongPositionCore.has(d)&&!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d))
         .sort((a,b)=>crossValue(a)-crossValue(b)||(score[a]||0)-(score[b]||0));
       for(const victim of victims){
         const projected=selected.filter(d=>d!==victim).concat(carryIncoming.digit);
@@ -9028,11 +9066,11 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
 
   // Meta ensemble rescue hanya jika benar-benar ACTIVE dan sedikitnya tiga router setuju.
   const metaPromoted=[];
-  if(routerJudge?.status==='ACTIVE'){
+  if(routerJudge?.status==='ACTIVE'&&canSwap()){
     const incoming=routerJudge.rank?.find(x=>!selected.includes(x.digit)&&x.consensus>=3&&x.norm>=.58);
     if(incoming){
       const protectedTop=new Set(topCoverage.slice(0,2));
-      const victims=selected.filter(d=>!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d)&&!positionCore.has(d))
+      const victims=selected.filter(d=>!strongPositionCore.has(d)&&!frontierProtected.has(d)&&!emergencePromoted.includes(d)&&!protectedTop.has(d))
         .sort((a,b)=>(routerJudge.ensemble?.[a]||0)-(routerJudge.ensemble?.[b]||0)||crossValue(a)-crossValue(b));
       for(const victim of victims){
         if(incoming.norm<(routerJudge.ensemble?.[victim]||0)+.10)continue;
@@ -9061,13 +9099,13 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const emergenceDecision=swapNotes.length?`emergence/omission ${swapNotes.join(', ')}`:'emergence tidak memaksa swap';
   candidate.routerScore=score.slice();
   candidate.decisionEngine={
-    mode:'scanner_gate_emergence_router',selected:selected.slice(),score,ranked,
+    mode:'protected_core_active_router_budget',selected:selected.slice(),score,ranked,
     coverageDecision:`${coverageDecision}; ${emergenceDecision}`,
     carryCap,carryUsed:finalCarry,carryExpected:carryBudget.expected,carryPreferred:carryBudget.preferred,
     emergenceTop:(emergence?.rank||[]).slice(0,6),
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
     latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,crossPositionPromoted,carryRolePromoted,metaPromoted,
-    note:`V12.0: carry cap adalah maksimum, bukan kuota. Router Judge hanya boleh rescue bila ACTIVE.  Exact-position rescue dibatasi satu slot; source dengan twin berdampingan boleh membuka maksimal dua macro-family frontier bila champion replay lintas-depth tidak terwakili. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
+    note:`V12.1: top-1 posisi yang sudah terpilih dilindungi; carry portfolio hanya aktif bila carry-router ACTIVE; seluruh rescue berbagi maksimum dua swap. Carry cap tetap maksimum, bukan kuota. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
   };
   return selected;
 }
@@ -9077,33 +9115,45 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   const final=uniqueDigits(finalDigits||[]);
   const historyCtx=candidate?.targetFullHistoryCoverageBalanceBridgeContext;
   const emergence=candidate?.sourceTransformEmergenceProfile;
+  const judge=candidate?.walkForwardRouterJudge;
   const selected=[];
   const add=d=>{d=Number(d);if(Number.isInteger(d)&&!selected.includes(d)&&final.includes(d)&&selected.length<5)selected.push(d);};
-  // V11.8: macro-family frontier adalah bukti diversifikasi yang paling mudah hilang,
-  // sehingga ditempatkan lebih dahulu di lima terkuat.
+
+  // 1. Jaga digit yang benar-benar mengubah final melalui router berizin.
   (candidate?.decisionEngine?.metaPromoted||[]).forEach(add);
   (candidate?.decisionEngine?.carryRolePromoted||[]).forEach(add);
-  (candidate?.decisionEngine?.crossPositionPromoted||[]).forEach(add);
   (candidate?.decisionEngine?.familyFrontierPromoted||[])
     .slice().sort((a,b)=>(b.gap*b.quality)-(a.gap*a.quality)||b.hits-a.hits||a.digit-b.digit)
     .forEach(x=>add(x.digit));
-  // Exact-position rescue tetap dipertahankan sebelum suara broad emergence.
   (candidate?.decisionEngine?.exactPositionPromoted||[])
     .slice().sort((a,b)=>(b.points*b.margin)-(a.points*a.margin)||a.position-b.position)
     .forEach(x=>add(x.digit));
-  // Promosi yang sudah lolos replay dijaga sebelum wakil posisi umum.
+  // Cross-position hanya diprioritaskan di 5D bila Judge ACTIVE; jika TIE, ia tetap hidup di 6D tetapi tidak mengambil slot utama.
+  if(judge?.status==='ACTIVE')(candidate?.decisionEngine?.crossPositionPromoted||[]).forEach(add);
   (candidate?.decisionEngine?.emergencePromoted||[]).slice(0,2).forEach(add);
-  // Jaga top-1 posisi berdasarkan confidence margin, bukan urutan A→K→L→E.
+
+  const topTwo=(historyCtx?.posRank||[]).map(r=>(r||[]).slice(0,2).map(x=>Number(x.digit)));
+  // 2. Bila hanya satu digit final yang mewakili top-2 suatu posisi, digit itu wajib bertahan di 5D.
+  topTwo.forEach(pair=>{
+    const represented=pair.filter(d=>final.includes(d));
+    if(represented.length===1)add(represented[0]);
+  });
+
+  // 3. Jaga top-1 posisi berdasarkan margin ke kandidat kedua.
   const positionLeaders=(historyCtx?.posRank||[]).map((r,p)=>{
-    const top=r?.[0],second=r?.[1];
-    if(!top)return null;
-    const margin=Number(top.points||0)/Math.max(1,Number(second?.points||0));
-    return {position:p,digit:top.digit,points:Number(top.points||0),margin};
+    const top=r?.[0],second=r?.[1];if(!top)return null;
+    return {position:p,digit:Number(top.digit),points:Number(top.points||0),margin:Number(top.points||0)/Math.max(1,Number(second?.points||0))};
   }).filter(Boolean).sort((a,b)=>b.margin-a.margin||b.points-a.points||a.position-b.position);
   positionLeaders.forEach(x=>add(x.digit));
-  // Tambahkan suara transformasi terkuat yang benar-benar masuk final.
-  (emergence?.rank||[]).filter(x=>x.status!=='AUDIT-ONLY'&&final.includes(x.digit)).slice(0,2).forEach(x=>add(x.digit));
-  // Lengkapi dengan decision score, lalu coverage sebagai tie-breaker.
+
+  // 4. Portofolio emergence 5D: satu broad champion dan satu precision champion yang berbeda.
+  const activeFinal=(emergence?.rank||[]).filter(x=>x.status!=='AUDIT-ONLY'&&final.includes(x.digit));
+  const broad=activeFinal[0];if(broad)add(broad.digit);
+  const precision=activeFinal.filter(x=>!broad||x.digit!==broad.digit)
+    .sort((a,b)=>b.precisionNorm-a.precisionNorm||b.norm-a.norm||a.digit-b.digit)[0];
+  if(precision&&precision.precisionNorm>=0.42)add(precision.digit);
+
+  // 5. Lengkapi dari decision score; coverage menjadi tie-breaker, bukan penguasa.
   final.slice().sort((a,b)=>(score[b]||0)-(score[a]||0)||((historyCtx?.coverage||[])[b]||0)-((historyCtx?.coverage||[])[a]||0)||a-b).forEach(add);
   candidate.strongFiveDigits=selected;
   if(candidate.decisionEngine)candidate.decisionEngine.strongFive=selected.slice();
@@ -9113,7 +9163,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V12.0: scanner gate → walk-forward judge → position/carry quorum → repeat-shape calibration',
+    title:'Decision Engine V12.1: protected position core → ACTIVE carry arbitration → rescue budget → repeat abstention',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -10015,12 +10065,28 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   }
   if(chosen == null) chosen = sortedAllowed[0]?.digit ?? allowed[0] ?? sorted[0]?.digit ?? 0;
   if(!allowed.includes(chosen)) chosen = sortedAllowed[0]?.digit ?? allowed[0] ?? chosen;
+  // V12.1 Repeat abstention: jangan selalu mengeluarkan dd. Bentuk repeat harus mempunyai
+  // replay posisi yang nyata; AK/LE yang kebetulan mengulang tidak cukup.
+  const shapeStrong=!!repeatShapeCalibration?.eligible&&repeatShapeCalibration.confidence>=0.46&&
+    repeatShapeCalibration.rawCount>=2&&repeatShapeCalibration.digitRate>=0.06;
+  const bridgeRawStrong=[
+    candidate.targetFullHistoryCoverageBalanceTwinScore,
+    candidate.targetFullHistoryScannerRouterBridgeTwinScore,
+    candidate.targetDeepWeekdayCycleBalanceBridgeTwinScore
+  ].some(arr=>Array.isArray(arr)&&Number(arr[chosen]||0)>=5200);
+  // Bridge tidak boleh menghidupkan repeat sendirian. Ia tetap membutuhkan jejak bentuk posisi
+  // dan digit repeat pada replay target-day, sehingga kebetulan AK/LE tidak menjadi dd palsu.
+  const bridgeStrong=bridgeRawStrong&&Number(repeatShapeCalibration?.rawCount||0)>=2&&
+    Number(repeatShapeCalibration?.shapeRate||0)>=0.22&&Number(repeatShapeCalibration?.digitRate||0)>=0.06&&
+    Number(repeatShapeCalibration?.posSupport||0)>=0.52;
+  const repeatAllowed=shapeStrong||bridgeStrong;
+  if(!repeatAllowed)chosen=null;
   candidate.twinAudit = {
     chosen,
     ranked: sorted.map(x => ({digit:x.digit, points:x.points, reasons:x.reasons})),
     cooldown:candidate.twinCooldown,
     repeatShapeCalibration,
-    decision:`V12.0 repeat-shape ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; kandidat kembar wajib berasal dari 6 digit dan melewati replay posisi.`
+    decision:`V12.1 repeat-shape ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; ${repeatAllowed?'repeat lolos':'abstain—bukti repeat belum cukup'}.`
   };
   return chosen;
 }
@@ -10728,8 +10794,8 @@ function renderResult(r){
       <h3>6 Digit Formula + 1 Kandidat Kembar</h3>
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
-      <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V12.0 memulai dari full-history scan, lalu menguji router frequency, position, transform, dan carry secara walk-forward. Hanya router ACTIVE yang boleh melakukan rescue; TIE-BREAKER hanya untuk audit, dan repeat/kembar dikalibrasi menurut bentuk posisi target-day.</p>
+      <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit==null?'Tidak ada kembar kuat':`${r.twinDigit}${r.twinDigit}`}</b></div>
+      <p class="tagline">Engine V12.1 memulai dari full-history scan. Top-1 posisi yang sudah terpilih dilindungi, carry portfolio hanya aktif bila carry-router ACTIVE, seluruh rescue dibatasi maksimal dua swap, dan kembar boleh abstain bila bentuk repeat tidak cukup kuat.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
