@@ -99,3 +99,9 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 @keyframes historyScanSweep{0%{top:8px}100%{top:calc(100% - 11px)}}
 @keyframes scanEdgeFlow{0%{background-position:0 0}100%{background-position:0 220%}}
 @media(prefers-reduced-motion:reduce){.scan-beam,.scan-edge{animation-duration:5s}}
+
+
+/* V11.6 • Emergence Replay + Carry Abstention */
+.audit-columns>div:nth-child(odd){border-left:4px solid rgba(37,99,235,.45)}
+.audit-columns>div:nth-child(even){border-left:4px solid rgba(16,185,129,.45)}
+.version-pill{box-shadow:0 8px 24px rgba(234,88,12,.12)}
