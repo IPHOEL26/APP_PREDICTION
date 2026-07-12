@@ -101,7 +101,7 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 @media(prefers-reduced-motion:reduce){.scan-beam,.scan-edge{animation-duration:5s}}
 
 
-/* V11.6 • Emergence Replay + Carry Abstention */
+/* V11.7 • Exact-Position Emergence Rescue + Carry Abstention */
 .audit-columns>div:nth-child(odd){border-left:4px solid rgba(37,99,235,.45)}
 .audit-columns>div:nth-child(even){border-left:4px solid rgba(16,185,129,.45)}
 .version-pill{box-shadow:0 8px 24px rgba(234,88,12,.12)}
