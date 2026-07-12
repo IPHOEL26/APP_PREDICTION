@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V11.7 • Exact-Position Emergence Rescue + Carry Abstention';
+const APP_VERSION = 'IPHOEL Formula Engine V11.8 • Twin-Release Family Frontier + Exact-Position Rescue';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -170,7 +170,7 @@ function buildFormulaPrediction(inputRows){
   applyTargetFullHistoryScannerRouterBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
   // V11.1: mining formula per posisi dan depth-balance berjalan setelah scanner utama.
   applyTargetFullHistoryCoverageBalanceBridge(candidate, rows, latest, targetAnchor, targetDay, transitionProfile, marketProfile);
-  // V11.7: source/latest hanya boleh masuk melalui transformasi yang direplay pada transisi hari yang sama.
+  // V11.8: source/latest hanya boleh masuk melalui transformasi yang direplay pada transisi hari yang sama.
   // Raw carry tidak dihitung sebagai transformasi dan carry cap tidak pernah dianggap kuota.
   applySourceTransformEmergencePortfolio(candidate, rows, latest, targetDay);
   // V11.1: scanner sekarang menjadi gate. Bridge lama belum boleh memberi pengaruh sebelum lolos replay.
@@ -8425,7 +8425,7 @@ function buildTargetTailZeroCenterTwinAnchorSumBridgeAudit(audit){
 
 
 
-// V11.7: Source-Transform Emergence Portfolio + Exact-Position Rescue.
+// V11.8: Source-Transform Emergence Portfolio + Twin-Release Macro-Family Frontier + Exact-Position Rescue.
 // Semua formula di bawah bersifat umum dan direplay pada transisi source-day → target-day.
 // Tidak ada digit, market, atau hasil aktual yang dikunci di dalam kode.
 function sourceTransformMacroFamily(key){
@@ -8519,6 +8519,7 @@ function buildSourceTransformEmergenceProfile(rows,latest,targetDay){
   };
   const current=sourceTransformTokens(latest).filter(t=>!t.key.startsWith('raw_'));
   const grouped=Array.from({length:10},()=>({}));
+  const familySupport={};
   current.forEach(t=>{
     const st=stats[t.key];if(!st)return;
     const q=formulaQuality(st);
@@ -8528,6 +8529,10 @@ function buildSourceTransformEmergenceProfile(rows,latest,targetDay){
   });
   DIGITS.forEach(d=>{
     const arr=Object.values(grouped[d]).sort((a,b)=>b.quality-a.quality||b.hits-a.hits||a.key.localeCompare(b.key));
+    arr.forEach(x=>{
+      if(!familySupport[x.family])familySupport[x.family]=Array(10).fill(null);
+      familySupport[x.family][d]={digit:d,key:x.key,label:x.label,family:x.family,quality:x.quality,hits:x.hits,trials:x.trials,bands:[...x.bands],positionHits:(x.positionHits||[]).slice()};
+    });
     const weights=[1,0.66,0.42,0.26,0.16];
     const portfolio=arr.slice(0,weights.length).reduce((sum,x,i)=>sum+x.quality*weights[i],0);
     const top2=arr.slice(0,2);
@@ -8554,7 +8559,14 @@ function buildSourceTransformEmergenceProfile(rows,latest,targetDay){
   const rank=DIGITS.map(d=>({digit:d,points:score[d],norm:score[d]/maxScore,precision:precision[d],precisionNorm:precision[d]/maxPrecision,status:status[d],families:familyCount[d],notes:notes[d]}))
     .sort((a,b)=>b.points-a.points||b.precision-a.precision||a.digit-b.digit);
   const positionRank=positionScore.map(arr=>DIGITS.map(d=>({digit:d,points:arr[d]})).sort((a,b)=>b.points-a.points||a.digit-b.digit));
-  return {transitions,score,precision,familyCount,status,notes,positionScore,positionFamilyCount,positionBestHits,rank,positionRank,active:rank.some(x=>x.status!=='AUDIT-ONLY')};
+  const familyFrontier=Object.entries(familySupport).map(([family,arr])=>{
+    const eligible=(arr||[]).filter(Boolean).filter(x=>x.hits>=3&&x.quality>=0.40&&x.bands.length>=2)
+      .sort((a,b)=>b.quality-a.quality||b.hits-a.hits||a.digit-b.digit);
+    if(!eligible.length)return null;
+    const champion=eligible[0],runner=eligible[1]||null;
+    return {family,champion,runner,margin:champion.quality/Math.max(0.0001,runner?.quality||champion.quality)};
+  }).filter(Boolean).sort((a,b)=>b.champion.quality-a.champion.quality||a.family.localeCompare(b.family));
+  return {transitions,score,precision,familyCount,status,notes,positionScore,positionFamilyCount,positionBestHits,rank,positionRank,familySupport,familyFrontier,active:rank.some(x=>x.status!=='AUDIT-ONLY')};
 }
 
 function applySourceTransformEmergencePortfolio(candidate,rows,latest,targetDay){
@@ -8568,7 +8580,7 @@ function applySourceTransformEmergencePortfolio(candidate,rows,latest,targetDay)
     if((profile.score[d]||0)>0)addCandidateTrace(candidate,d,profile.score[d],`Source-transform ${profile.status[d]}: ${(profile.notes[d]||[]).slice(0,2).join(', ')}`,'sourceTransformEmergence');
   });
   candidate.sourceTransformEmergenceAudit={
-    title:`V11.7 source-transform replay: ${profile.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'}`, 
+    title:`V11.8 source-transform replay: ${profile.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'}`, 
     top:profile.rank.slice(0,8).map(x=>`${x.digit}:${Math.round(x.points)} • ${x.status} • ${x.notes.slice(0,2).join(', ')}`),
     detail:'Raw source tidak dihitung sebagai transformasi. ACTIVE/TIE-BREAKER boleh ikut omission portfolio; AUDIT-ONLY tidak boleh memaksa hasil.'
   };
@@ -8589,7 +8601,7 @@ function sourceTransformEmergencePairSeeds(candidate,kind){
     const leftFamilies=p.positionFamilyCount?.[left]?.[a.digit]||0;
     const rightFamilies=p.positionFamilyCount?.[right]?.[b.digit]||0;
     const exactBonus=2200*Math.min(2,leftFamilies)+2200*Math.min(2,rightFamilies);
-    out.push({pair:`${a.digit}${b.digit}`,width:2,bonus:Math.round(11000+0.18*(a.points+b.points)+exactBonus-900*(ia+ib)),label:`V11.7 source-transform exact-position ${kind}`});
+    out.push({pair:`${a.digit}${b.digit}`,width:2,bonus:Math.round(11000+0.18*(a.points+b.points)+exactBonus-900*(ia+ib)),label:`V11.8 source-transform exact-position ${kind}`});
   }));
   return out.sort((a,b)=>b.bonus-a.bonus||a.pair.localeCompare(b.pair)).slice(0,6);
 }
@@ -8677,7 +8689,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const scannerRank=DIGITS.slice().sort((a,b)=>((candidate.targetFullHistoryScannerRouterBridgeScore||[])[b]||0)-((candidate.targetFullHistoryScannerRouterBridgeScore||[])[a]||0)||(score[b]||0)-(score[a]||0)||a-b);
   let scannerAdded=0;
   scannerRank.forEach(d=>{if(scannerAdded>=2)return;if(((candidate.targetFullHistoryScannerRouterBridgeScore||[])[d]||0)<=0)return;if(addSelected(d))scannerAdded++;});
-  // V11.7: tidak ada tahap yang otomatis mengisi carry. Slot tersisa diisi ranking gated saja.
+  // V11.8: tidak ada tahap yang otomatis mengisi carry. Slot tersisa diisi ranking gated saja.
   ranked.forEach(x=>{if(selected.length<6)addSelected(x.digit);});
   ranked.forEach(x=>{if(selected.length<6&&!selected.includes(x.digit))selected.push(x.digit);});
 
@@ -8709,7 +8721,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     coverageDecision=notes.length?`coverage quorum ${notes.join(', ')} (${quorumCount}/${quorumTarget})`:`coverage quorum terpenuhi ${quorumCount}/${quorumTarget}`;
   }
 
-  // V11.7: exact-position emergence leaders.
+  // V11.8: exact-position emergence leaders.
   // Sebuah digit hanya dilindungi bila menjadi pemimpin posisi dengan margin jelas,
   // didukung sedikitnya dua keluarga transformasi independen, dan replay exact-position >=2.
   const emergencePositionLeaders=[];
@@ -8860,11 +8872,64 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     }
   }
 
-  // Final omission audit: strongest excluded dibandingkan dengan weakest included, tanpa lebih dari dua swap total.
+  // V11.8 Twin-Release Macro-Family Frontier.
+  // Saat source memiliki twin berdampingan, beberapa transformasi berbagi input yang sama dan ranking digit
+  // cenderung terkonsentrasi pada keluarga populer. Router membuka maksimal dua slot untuk champion keluarga
+  // yang benar-benar lolos replay lintas-depth. Tidak ada digit atau market yang dikunci.
+  const familyFrontierPromoted=[];
+  const latestDigits=(latest?.digits||[]).slice(0,4);
+  const adjacentTwin=latestDigits.length>=4&&(latestDigits[0]===latestDigits[1]||latestDigits[1]===latestDigits[2]||latestDigits[2]===latestDigits[3]);
+  const targetTwinRate=Number(candidate.twinCycleProfile?.targetTwinRate||0);
+  const frontierProtected=new Set(exactPositionPromoted.map(x=>x.digit));
+  if(adjacentTwin&&targetTwinRate>=0.42&&Number(candidate.twinCycleProfile?.total||0)>=5&&emergence?.familyFrontier?.length){
+    const maxDecisionSafe=Math.max(1,...score),maxCoverageSafe=Math.max(1,...(historyCtx?.coverage||[1]));
+    const exactSupport=d=>Math.max(...(emergence.positionScore||[]).map(a=>Number(a?.[d]||0)),0);
+    const maxExact=Math.max(1,...DIGITS.map(exactSupport));
+    const familyCandidates=emergence.familyFrontier.map(frontier=>{
+      const arr=emergence.familySupport?.[frontier.family]||[];
+      const champion=frontier.champion;
+      const selectedBest=Math.max(0,...selected.map(d=>Number(arr[d]?.quality||0)));
+      const representation=selectedBest/Math.max(0.0001,Number(champion?.quality||0));
+      return {...frontier,representation,gap:1-representation};
+    }).filter(x=>{
+      const d=Number(x.champion?.digit);
+      return Number.isInteger(d)&&!selected.includes(d)&&!latestLookup.has(d)&&x.gap>=0.08&&
+        Number(x.champion?.hits||0)>=3&&Number(x.champion?.quality||0)>=0.40&&
+        (x.champion?.bands||[]).length>=2&&(emergence.status?.[d]||'AUDIT-ONLY')!=='AUDIT-ONLY';
+    }).sort((a,b)=>(b.gap*b.champion.quality)-(a.gap*a.champion.quality)||b.champion.quality-a.champion.quality||a.champion.digit-b.champion.digit);
+    for(const frontier of familyCandidates){
+      if(familyFrontierPromoted.length>=2)break;
+      const incoming=Number(frontier.champion.digit);
+      const protectedTop=new Set(topCoverage.slice(0,2));
+      const victimValue=d=>0.52*((score[d]||0)/maxDecisionSafe)+0.24*((historyCtx?.coverage?.[d]||0)/maxCoverageSafe)+0.16*((emergence?.score?.[d]||0)/maxEmergence)+0.08*(exactSupport(d)/maxExact);
+      const victims=selected.filter(d=>d!==incoming&&!positionCore.has(d)&&!protectedTop.has(d)&&!frontierProtected.has(d))
+        .sort((a,b)=>victimValue(a)-victimValue(b)||(score[a]||0)-(score[b]||0)||a-b);
+      let replaced=false;
+      for(const victim of victims){
+        const projected=selected.filter(d=>d!==victim).concat(incoming);
+        const carryOk=projected.filter(d=>latestLookup.has(d)).length<=carryCap;
+        const quorumOk=!topCoverageSet.size||projected.filter(d=>topCoverageSet.has(d)).length>=quorumTarget;
+        if(!carryOk||!quorumOk)continue;
+        const incomingUtility=0.46*frontier.champion.quality+0.24*frontier.gap+0.18*((emergence?.score?.[incoming]||0)/maxEmergence)+0.12*((score[incoming]||0)/maxDecisionSafe);
+        const victimUtility=0.30*victimValue(victim)+0.18*Number((emergence.familySupport?.[frontier.family]||[])[victim]?.quality||0);
+        if(incomingUtility<victimUtility*1.03)continue;
+        selected[selected.indexOf(victim)]=incoming;
+        familyFrontierPromoted.push({digit:incoming,family:frontier.family,victim,gap:frontier.gap,quality:frontier.champion.quality,hits:frontier.champion.hits});
+        frontierProtected.add(incoming);
+        emergencePromoted.push(incoming);
+        swapNotes.push(`${victim}→${incoming} (family ${frontier.family})`);
+        replaced=true;
+        break;
+      }
+      if(!replaced)continue;
+    }
+  }
+
+  // Final omission audit: strongest excluded dibandingkan dengan weakest included, tanpa lebih dari dua swap tambahan.
   const excluded=DIGITS.filter(d=>!selected.includes(d)).sort((a,b)=>emergenceValue(b)-emergenceValue(a)||(score[b]||0)-(score[a]||0));
   if(swapNotes.length<2&&excluded.length){
     const incoming=excluded[0];
-    const victim=selected.filter(d=>!positionCore.has(d)).sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0))[0];
+    const victim=selected.filter(d=>!positionCore.has(d)&&!frontierProtected.has(d)).sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0))[0];
     if(victim!=null&&emergence?.status?.[incoming]==='ACTIVE'&&emergenceValue(incoming)>emergenceValue(victim)*1.18){
       const projected=selected.filter(d=>d!==victim).concat(incoming);
       if(projected.filter(d=>latestLookup.has(d)).length<=carryCap&&(!topCoverageSet.size||projected.filter(d=>topCoverageSet.has(d)).length>=quorumTarget)){
@@ -8882,8 +8947,8 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     carryCap,carryUsed:finalCarry,carryExpected:carryBudget.expected,carryPreferred:carryBudget.preferred,
     emergenceTop:(emergence?.rank||[]).slice(0,6),
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
-    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,
-    note:`V11.7: carry cap adalah maksimum, bukan kuota. Exact-position emergence hanya boleh rescue satu slot bila margin, keluarga independen, carry cap, dan coverage quorum lolos; final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
+    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,
+    note:`V11.8: carry cap adalah maksimum, bukan kuota. Exact-position rescue dibatasi satu slot; source dengan twin berdampingan boleh membuka maksimal dua macro-family frontier bila champion replay lintas-depth tidak terwakili. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
   };
   return selected;
 }
@@ -8895,12 +8960,16 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   const emergence=candidate?.sourceTransformEmergenceProfile;
   const selected=[];
   const add=d=>{d=Number(d);if(Number.isInteger(d)&&!selected.includes(d)&&final.includes(d)&&selected.length<5)selected.push(d);};
-  // Digit yang benar-benar dipromosikan omission/emergence wajib diaudit ulang di lima terkuat.
-  (candidate?.decisionEngine?.emergencePromoted||[]).forEach(add);
-  // Tambahkan suara transformasi terkuat yang benar-benar masuk final.
-  (emergence?.rank||[]).filter(x=>x.status!=='AUDIT-ONLY'&&final.includes(x.digit)).slice(0,2).forEach(x=>add(x.digit));
+  // V11.8: macro-family frontier adalah bukti diversifikasi yang paling mudah hilang,
+  // sehingga ditempatkan lebih dahulu di lima terkuat.
+  (candidate?.decisionEngine?.familyFrontierPromoted||[])
+    .slice().sort((a,b)=>(b.gap*b.quality)-(a.gap*a.quality)||b.hits-a.hits||a.digit-b.digit)
+    .forEach(x=>add(x.digit));
+  // Exact-position rescue tetap dipertahankan sebelum suara broad emergence.
+  (candidate?.decisionEngine?.exactPositionPromoted||[])
+    .slice().sort((a,b)=>(b.points*b.margin)-(a.points*a.margin)||a.position-b.position)
+    .forEach(x=>add(x.digit));
   // Jaga top-1 posisi berdasarkan confidence margin, bukan urutan A→K→L→E.
-  // Posisi dengan leader yang unggul jelas atas runner-up mendapat prioritas lebih tinggi.
   const positionLeaders=(historyCtx?.posRank||[]).map((r,p)=>{
     const top=r?.[0],second=r?.[1];
     if(!top)return null;
@@ -8908,6 +8977,10 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
     return {position:p,digit:top.digit,points:Number(top.points||0),margin};
   }).filter(Boolean).sort((a,b)=>b.margin-a.margin||b.points-a.points||a.position-b.position);
   positionLeaders.forEach(x=>add(x.digit));
+  // Promosi broad/precision tetap dibaca, tetapi tidak boleh menutup semua wakil posisi.
+  (candidate?.decisionEngine?.emergencePromoted||[]).forEach(add);
+  // Tambahkan suara transformasi terkuat yang benar-benar masuk final.
+  (emergence?.rank||[]).filter(x=>x.status!=='AUDIT-ONLY'&&final.includes(x.digit)).slice(0,2).forEach(x=>add(x.digit));
   // Lengkapi dengan decision score, lalu coverage sebagai tie-breaker.
   final.slice().sort((a,b)=>(score[b]||0)-(score[a]||0)||((historyCtx?.coverage||[])[b]||0)-((historyCtx?.coverage||[])[a]||0)||a-b).forEach(add);
   candidate.strongFiveDigits=selected;
@@ -8918,13 +8991,14 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V11.7: scanner gate → source-transform replay → exact-position rescue → carry abstention → omission rotor',
+    title:'Decision Engine V11.8: scanner gate → exact-position rescue → twin-release family frontier → carry abstention → omission rotor',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
     coverageDecision:audit.coverageDecision || '',
     carry:`${audit.carryUsed ?? '-'} / batas ${audit.carryCap ?? '-'} • expected ${Number(audit.carryExpected||0).toFixed(2)} • preferred ${audit.carryPreferred ?? '-'}`,
     gate:`${(audit.gateAllowed || []).length} lolos; ${(audit.gateBlocked || []).length} diblokir`,
+    familyFrontier:(audit.familyFrontierPromoted||[]).map(x=>`${x.victim}→${x.digit} via ${x.family} (${Math.round(100*x.gap)}% gap, ${x.hits} hit)`).join(' | ') || 'tidak aktif',
     note:audit.note || ''
   };
 }
@@ -9905,7 +9979,7 @@ function chooseOrderedPairs(rows, candidate, formulas, targetAnchor, learned, ki
   pushSeeds(targetDeepWeekdayCycleBalanceBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target deep weekday cycle balance bridge');
   pushSeeds(targetFullHistoryScannerRouterBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target full-history scanner router bridge');
   pushSeeds(targetFullHistoryCoverageBalanceBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target full-history position scanner');
-  pushSeeds(sourceTransformEmergencePairSeeds(candidate, kind), 0, 'V11.7 source-transform exact-position replay');
+  pushSeeds(sourceTransformEmergencePairSeeds(candidate, kind), 0, 'V11.8 source-transform exact-position replay');
   pushSeeds(targetFrontCarryAnchorTwinBridgePairSeeds(latest, targetAnchor, candidate, kind), 0, 'target front-carry anchor-twin bridge');
   pushSeeds(worldReplayPairSeeds(latest, candidate, kind), 0, 'world formula replay');
 
@@ -10423,8 +10497,8 @@ function renderResult(r){
   const targetAnchorZeroFrontEchoMirrorBridgeHtml = r.audit.targetAnchorZeroFrontEchoMirrorBridge ? `<div><b>Target anchor-zero front-echo mirror bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.ak)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.le)}${r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE ? ' / '+escapeHtml(r.audit.targetAnchorZeroFrontEchoMirrorBridge.altLE) : ''}</li></ul></div>` : '';
   const targetFrontCarryAnchorTwinBridgeHtml = r.audit.targetFrontCarryAnchorTwinBridge ? `<div><b>Target front-carry anchor-twin bridge</b><ul class="process-list small"><li>${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.title)}</li><li>Digit: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.digits)}</li><li>AK: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.ak)}${r.audit.targetFrontCarryAnchorTwinBridge.altAK ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altAK) : ''}</li><li>LE: ${escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.le)}${r.audit.targetFrontCarryAnchorTwinBridge.altLE ? ' / '+escapeHtml(r.audit.targetFrontCarryAnchorTwinBridge.altLE) : ''}</li></ul></div>` : '';
   const formulaGateHtml = r.audit.formulaGate ? `<div><b>Scanner Formula Gate</b><ul class="process-list small"><li>${escapeHtml(r.audit.formulaGate.title)}</li><li><b>Lolos</b></li>${(r.audit.formulaGate.allowed || []).slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>Tidak ada bridge lama yang lolos; scanner-native mengambil alih.</li>'}<li><b>Diblokir</b></li>${(r.audit.formulaGate.blocked || []).slice(0,6).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>-</li>'}</ul></div>` : '';
-  const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence V11.7</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
-  const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>Coverage / emergence: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li><li>Carry budget: ${escapeHtml(r.audit.decisionEngine.carry || '-')}</li><li>Formula gate: ${escapeHtml(r.audit.decisionEngine.gate || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
+  const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence V11.8</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
+  const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>Coverage / emergence: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li><li>Twin-release family frontier: ${escapeHtml(r.audit.decisionEngine.familyFrontier || 'tidak aktif')}</li><li>Carry budget: ${escapeHtml(r.audit.decisionEngine.carry || '-')}</li><li>Formula gate: ${escapeHtml(r.audit.decisionEngine.gate || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
@@ -10505,7 +10579,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit}${r.twinDigit}</b></div>
-      <p class="tagline">Engine V11.7 memakai Full-History Gate + Source-Transform Emergence + Exact-Position Rescue + Carry Abstention: seluruh riwayat dipindai tertua ke terbaru, transformasi source direplay, pemimpin posisi emergence hanya boleh menyelamatkan satu slot bila margin dan bukti independennya lolos, lalu final diaudit melalui coverage serta omission cost.</p>
+      <p class="tagline">Engine V11.8 memakai Full-History Gate + Exact-Position Rescue + Twin-Release Macro-Family Frontier + Carry Abstention: seluruh riwayat dipindai tertua ke terbaru; bila source memiliki twin berdampingan dan riwayat target mendukung repeat, maksimal dua champion keluarga transformasi yang belum terwakili boleh masuk tanpa merusak coverage quorum maupun carry cap.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
