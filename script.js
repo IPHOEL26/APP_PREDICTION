@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V12.1 • Protected Position Core + Active Carry Arbitration + Rescue Budget';
+const APP_VERSION = 'IPHOEL Formula Engine V12.2 • Repeat-Role Consensus + Pair-Anchored Carry Substitution';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -8641,7 +8641,7 @@ function buildWalkForwardRouterJudgeProfile(rows,latest,targetDay){
   const rank=DIGITS.map(d=>({digit:d,norm:ensemble[d]||0,consensus:consensus[d]})).sort((a,b)=>b.norm-a.norm||b.consensus-a.consensus||a.digit-b.digit);
   return {transitions,validation,stats,current,ensemble,rank,consensus,status,ensembleAvg,baseAvg,bestAvg,improved,worse,flat};
 }
-function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.1 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
+function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.2 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
 function buildWalkForwardRouterJudgeAudit(a){if(!a)return null;return {title:a.title,routers:a.routers,result:a.result,top:a.top};}
 
 function carryBudgetProfile(profile,carryCap){
@@ -8807,6 +8807,41 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   // Ia tidak dipaksa masuk, tetapi bila sudah masuk dianggap protected core.
   const strongPositionCore=new Set(positionCore);
 
+  // V12.2 Pair-Anchored Carry Substitution.
+  // TIE-BREAKER tidak boleh menambah carry, tetapi boleh mengganti carry dengan carry lain bila:
+  // (a) digit masuk berada pada pasangan AK/LE peringkat pertama,
+  // (b) transformasinya ACTIVE,
+  // (c) ia top-2 pada minimal satu posisi full-history,
+  // (d) korban carry tidak ditopang pasangan utama dan protected-core korban bermargin rendah.
+  const pairCarryPromoted=[];
+  if(decisionJudge?.status!=='AUDIT-ONLY'&&canSwap()){
+    const topPairDigits=new Set();
+    [akle?.ak?.[0]?.pair,akle?.le?.[0]?.pair].forEach(q=>{q=String(q||'');if(/^\d{2}$/.test(q)){topPairDigits.add(Number(q[0]));topPairDigits.add(Number(q[1]));}});
+    const topTwoAny=d=>(historyCtx?.posRank||[]).some(r=>(r||[]).slice(0,2).some(x=>Number(x.digit)===d));
+    const leaderMargin=d=>{
+      let m=0;(historyCtx?.posRank||[]).forEach(r=>{if(Number(r?.[0]?.digit)!==d)return;m=Math.max(m,Number(r[0]?.points||0)/Math.max(1,Number(r?.[1]?.points||0)));});return m;
+    };
+    const carryScore=decisionJudge.current?.carry||Array(10).fill(0);
+    const incoming=latestSet.filter(d=>!selected.includes(d)&&topPairDigits.has(d)&&topTwoAny(d)&&emergence?.status?.[d]==='ACTIVE')
+      .map(d=>({digit:d,carry:Number(carryScore[d]||0),em:(emergence?.rank||[]).find(x=>x.digit===d)}))
+      .filter(x=>(x.em?.norm||0)>=.62)
+      .sort((a,b)=>(b.em.norm+.25*b.carry)-(a.em.norm+.25*a.carry)||a.digit-b.digit)[0];
+    if(incoming){
+      const victims=selected.filter(d=>latestLookup.has(d)&&!topPairDigits.has(d)&&d!==incoming.digit)
+        .filter(d=>!strongPositionCore.has(d)||leaderMargin(d)<1.25)
+        .sort((a,b)=>((carryScore[a]||0)+.20*emergenceValue(a))-((carryScore[b]||0)+.20*emergenceValue(b)));
+      const victim=victims[0];
+      if(victim!=null&&incoming.carry>=Number(carryScore[victim]||0)*.78){
+        const projected=selected.filter(d=>d!==victim).concat(incoming.digit);
+        if(projected.filter(d=>latestLookup.has(d)).length<=carryCap&&(!topCoverageSet.size||projected.filter(d=>topCoverageSet.has(d)).length>=quorumTarget)){
+          selected[selected.indexOf(victim)]=incoming.digit;pairCarryPromoted.push(incoming.digit);swapNotes.push(`${victim}→${incoming.digit} (pair-anchored carry)`);
+        }
+      }
+    }
+  }
+
+  const pairCarryProtected=new Set(pairCarryPromoted);
+
   // Emergence portfolio: satu kandidat broad + satu kandidat precision, selalu melalui replay dan deduplikasi keluarga.
   if(emergence?.rank?.length){
     const eligible=emergence.rank.filter(x=>!selected.includes(x.digit)&&!latestLookup.has(x.digit)&&x.status!=='AUDIT-ONLY'&&x.norm>=0.45);
@@ -8823,15 +8858,15 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
       let victim=null;
       const protectedCoverage=new Set(topCoverage.slice(0,2));
       const coverageProtected=d=>protectedCoverage.has(d)||(topCoverage.slice(0,3).includes(d)&&!latestLookup.has(d));
-      const weakCarry=selected.filter(d=>latestLookup.has(d)&&!positionCore.has(d)&&!coverageProtected(d))
+      const weakCarry=selected.filter(d=>latestLookup.has(d)&&!positionCore.has(d)&&!coverageProtected(d)&&!pairCarryProtected.has(d))
         .sort((a,b)=>carryQuality(a)-carryQuality(b))[0];
       if(weakCarry!=null&&(carryNow>carryBudget.preferred||incomingValue>carryQuality(weakCarry)*0.90))victim=weakCarry;
       if(victim==null){
-        const outsideCore=selected.filter(d=>!positionCore.has(d)&&!coverageProtected(d));
+        const outsideCore=selected.filter(d=>!positionCore.has(d)&&!coverageProtected(d)&&!pairCarryProtected.has(d));
         victim=outsideCore.sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0))[0];
       }
       if(victim==null){
-        victim=selected.filter(d=>!positionCore.has(d)).sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0))[0];
+        victim=selected.filter(d=>!positionCore.has(d)&&!pairCarryProtected.has(d)).sort((a,b)=>emergenceValue(a)-emergenceValue(b)||(score[a]||0)-(score[b]||0))[0];
       }
       if(victim==null)return;
       const projected=selected.filter(d=>d!==victim).concat(incoming);
@@ -8956,7 +8991,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const latestDigits=(latest?.digits||[]).slice(0,4);
   const adjacentTwin=latestDigits.length>=4&&(latestDigits[0]===latestDigits[1]||latestDigits[1]===latestDigits[2]||latestDigits[2]===latestDigits[3]);
   const targetTwinRate=Number(candidate.twinCycleProfile?.targetTwinRate||0);
-  const frontierProtected=new Set(exactPositionPromoted.map(x=>x.digit));
+  const frontierProtected=new Set([...exactPositionPromoted.map(x=>x.digit),...pairCarryPromoted]);
   if(adjacentTwin&&targetTwinRate>=0.42&&Number(candidate.twinCycleProfile?.total||0)>=5&&emergence?.familyFrontier?.length){
     const maxDecisionSafe=Math.max(1,...score),maxCoverageSafe=Math.max(1,...(historyCtx?.coverage||[1]));
     const exactSupport=d=>Math.max(...(emergence.positionScore||[]).map(a=>Number(a?.[d]||0)),0);
@@ -9099,13 +9134,13 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
   const emergenceDecision=swapNotes.length?`emergence/omission ${swapNotes.join(', ')}`:'emergence tidak memaksa swap';
   candidate.routerScore=score.slice();
   candidate.decisionEngine={
-    mode:'protected_core_active_router_budget',selected:selected.slice(),score,ranked,
+    mode:'repeat_role_pair_anchored_carry',selected:selected.slice(),score,ranked,
     coverageDecision:`${coverageDecision}; ${emergenceDecision}`,
     carryCap,carryUsed:finalCarry,carryExpected:carryBudget.expected,carryPreferred:carryBudget.preferred,
     emergenceTop:(emergence?.rank||[]).slice(0,6),
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
-    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,crossPositionPromoted,carryRolePromoted,metaPromoted,
-    note:`V12.1: top-1 posisi yang sudah terpilih dilindungi; carry portfolio hanya aktif bila carry-router ACTIVE; seluruh rescue berbagi maksimum dua swap. Carry cap tetap maksimum, bukan kuota. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
+    latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,crossPositionPromoted,carryRolePromoted,pairCarryPromoted,metaPromoted,
+    note:`V12.2: top-1 posisi tetap dilindungi, repeat memakai exact-shape/carry-role consensus, dan substitusi sesama carry hanya boleh melalui pasangan utama serta replay ACTIVE. Carry cap tetap maksimum, bukan kuota. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
   };
   return selected;
 }
@@ -9122,6 +9157,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
   // 1. Jaga digit yang benar-benar mengubah final melalui router berizin.
   (candidate?.decisionEngine?.metaPromoted||[]).forEach(add);
   (candidate?.decisionEngine?.carryRolePromoted||[]).forEach(add);
+  (candidate?.decisionEngine?.pairCarryPromoted||[]).forEach(add);
   (candidate?.decisionEngine?.familyFrontierPromoted||[])
     .slice().sort((a,b)=>(b.gap*b.quality)-(a.gap*a.quality)||b.hits-a.hits||a.digit-b.digit)
     .forEach(x=>add(x.digit));
@@ -9163,7 +9199,7 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V12.1: protected position core → ACTIVE carry arbitration → rescue budget → repeat abstention',
+    title:'Decision Engine V12.2: protected core → pair-anchored carry substitution → repeat-role consensus',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -9171,7 +9207,7 @@ function buildDecisionEngineAudit(audit){
     carry:`${audit.carryUsed ?? '-'} / batas ${audit.carryCap ?? '-'} • expected ${Number(audit.carryExpected||0).toFixed(2)} • preferred ${audit.carryPreferred ?? '-'}`,
     gate:`${(audit.gateAllowed || []).length} lolos; ${(audit.gateBlocked || []).length} diblokir`,
     familyFrontier:(audit.familyFrontierPromoted||[]).map(x=>`${x.victim}→${x.digit} via ${x.family} (${Math.round(100*x.gap)}% gap, ${x.hits} hit)`).join(' | ') || 'tidak aktif',
-    routerRescue:[...(audit.crossPositionPromoted||[]).map(d=>`position ${d}`),...(audit.carryRolePromoted||[]).map(d=>`carry ${d}`),...(audit.metaPromoted||[]).map(d=>`meta ${d}`)].join(' | ') || 'tidak aktif',
+    routerRescue:[...(audit.crossPositionPromoted||[]).map(d=>`position ${d}`),...(audit.carryRolePromoted||[]).map(d=>`carry ${d}`),...(audit.pairCarryPromoted||[]).map(d=>`pair-carry ${d}`),...(audit.metaPromoted||[]).map(d=>`meta ${d}`)].join(' | ') || 'tidak aktif',
     note:audit.note || ''
   };
 }
@@ -9814,12 +9850,13 @@ function forceAKLEMiddleRescue(selected, akle, candidate){
   selected[selected.indexOf(victim)] = rescue;
 }
 
-function buildRepeatShapeCalibration(candidate,allowedDigits,akle){
+function buildRepeatShapeCalibration(candidate,allowedDigits,akle,latest){
   const allowed=uniqueDigits(allowedDigits||[]),transitions=candidate?.walkForwardRouterJudge?.transitions||[];
   if(!allowed.length||transitions.length<4)return null;
   const pos=Array.from({length:4},()=>Array(10).fill(0)),weights=Array(4).fill(0);
   const addPosition=(arrays,factor=1)=>{(arrays||[]).forEach((arr,p)=>{if(!arr||p>=4)return;const vals=arr.map(x=>typeof x==='object'?Number(x.points||0):Number(x||0)),max=Math.max(1,...vals);DIGITS.forEach(d=>pos[p][d]+=factor*(vals[d]||0)/max);weights[p]+=factor;});};
-  addPosition(candidate?.targetFullHistoryCoverageBalanceBridgeContext?.posRank,1);
+  const fullPosRank=candidate?.targetFullHistoryCoverageBalanceBridgeContext?.posRank||[];
+  addPosition(fullPosRank,1);
   addPosition(candidate?.sourceTransformEmergenceProfile?.positionScore,.82);
   if(candidate?.walkForwardRouterJudge?.status==='ACTIVE')addPosition(candidate.walkForwardRouterJudge.current?.positionDetail,.60);
   const pairArrays=Array.from({length:4},()=>Array(10).fill(0));
@@ -9827,10 +9864,51 @@ function buildRepeatShapeCalibration(candidate,allowedDigits,akle){
   (akle?.le||[]).slice(0,4).forEach((x,i)=>{const q=String(x.pair||'');if(/^\d{2}$/.test(q)){pairArrays[2][Number(q[0])]+=4-i;pairArrays[3][Number(q[1])]+=4-i;}});
   addPosition(pairArrays,.62);
   pos.forEach((a,p)=>{const den=Math.max(.01,weights[p]);a.forEach((v,d)=>a[d]=v/den);});
+  const rankIndex=Array.from({length:4},()=>Array(10).fill(99));
+  fullPosRank.forEach((rank,p)=>(rank||[]).forEach((x,i)=>{const d=Number(x?.digit);if(Number.isInteger(d))rankIndex[p][d]=i;}));
   const shapes=[{shape:'AK',p:[0,1]},{shape:'KL',p:[1,2]},{shape:'LE',p:[2,3]},{shape:'AE',p:[0,3]},{shape:'AL',p:[0,2]},{shape:'KE',p:[1,3]}],out=[];
   const totalW=transitions.reduce((z,tr,i)=>z+.78+.44*(i+1)/transitions.length,0);
-  shapes.forEach(sh=>{let repeatW=0,raw=0;const digitW=Array(10).fill(0);transitions.forEach((tr,i)=>{const d=tr.target?.digits||[],w=.78+.44*(i+1)/transitions.length;if(d.length<4||d[sh.p[0]]!==d[sh.p[1]])return;repeatW+=w;raw++;digitW[d[sh.p[0]]]+=w;});const rate=repeatW/Math.max(1e-9,totalW);allowed.forEach(d=>{const ps=(pos[sh.p[0]][d]+pos[sh.p[1]][d])/2,dr=digitW[d]/Math.max(1e-9,totalW),points=.46*ps+.36*dr+.18*rate;out.push({digit:d,shape:sh.shape,positions:sh.p,points,posSupport:ps,digitRate:dr,shapeRate:rate,rawCount:raw});});});
-  out.sort((a,b)=>b.points-a.points||b.rawCount-a.rawCount||a.digit-b.digit);const top=out[0],second=out.find(x=>x.digit!==top?.digit||x.shape!==top?.shape);if(!top)return null;const margin=top.points/Math.max(1e-6,second?.points||top.points),confidence=top.points*Math.min(1.30,margin);const eligible=(top.rawCount>=2&&top.shapeRate>=.22&&top.posSupport>=.42)||(top.rawCount>=1&&top.posSupport>=.76&&top.digitRate>=.09&&confidence>=.50);return {...top,margin,confidence,eligible,runnerUp:second||null};
+  const repeatSignature=digits=>{const list=shapes.filter(sh=>digits?.[sh.p[0]]===digits?.[sh.p[1]]).map(sh=>sh.shape).sort();return list.length?list.join('+'):'none';};
+  const currentSourceSignature=repeatSignature(latest?.digits||[]);
+  const currentSourceHasRepeat=currentSourceSignature!=='none';
+  let sourceShapeSamples=0,sourceShapeRepeatCount=0;
+  transitions.forEach(tr=>{if(repeatSignature(tr.source?.digits||[])!==currentSourceSignature)return;sourceShapeSamples++;if(repeatSignature(tr.target?.digits||[])!=='none')sourceShapeRepeatCount++;});
+  const sourceShapeRepeatRate=sourceShapeRepeatCount/Math.max(1,sourceShapeSamples);
+  const sourceRepeatBlocked=currentSourceHasRepeat&&sourceShapeSamples>=1&&sourceShapeRepeatCount===0;
+  let repeatTargetCount=0,carryRepeatCount=0;
+  transitions.forEach(tr=>{
+    const td=tr.target?.digits||[],sd=tr.source?.digits||[];if(td.length<4)return;
+    const repeatDigits=uniqueDigits(shapes.filter(sh=>td[sh.p[0]]===td[sh.p[1]]).map(sh=>td[sh.p[0]]));
+    if(!repeatDigits.length)return;repeatTargetCount++;
+    if(repeatDigits.some(d=>sd.includes(d)))carryRepeatCount++;
+  });
+  shapes.forEach(sh=>{
+    let repeatW=0,raw=0;const digitW=Array(10).fill(0);
+    transitions.forEach((tr,i)=>{const d=tr.target?.digits||[],w=.78+.44*(i+1)/transitions.length;if(d.length<4||d[sh.p[0]]!==d[sh.p[1]])return;repeatW+=w;raw++;digitW[d[sh.p[0]]]+=w;});
+    const rate=repeatW/Math.max(1e-9,totalW);
+    allowed.forEach(d=>{
+      const ps=(pos[sh.p[0]][d]+pos[sh.p[1]][d])/2,dr=digitW[d]/Math.max(1e-9,totalW);
+      const leftRank=rankIndex[sh.p[0]][d],rightRank=rankIndex[sh.p[1]][d];
+      const dualTop3=leftRank<=2&&rightRank<=2,dualTop2=leftRank<=1&&rightRank<=1;
+      const positionBonus=dualTop2?.10:dualTop3?.055:0;
+      const recurrenceBonus=dr>0?.10:0;
+      const points=.42*ps+.32*dr+.16*rate+positionBonus+recurrenceBonus;
+      out.push({digit:d,shape:sh.shape,positions:sh.p,points,posSupport:ps,digitRate:dr,shapeRate:rate,rawCount:raw,leftRank,rightRank,dualTop3,dualTop2});
+    });
+  });
+  out.sort((a,b)=>b.points-a.points||b.digitRate-a.digitRate||b.rawCount-a.rawCount||a.digit-b.digit);
+  const stable=out.filter(x=>x.rawCount>=2&&x.shapeRate>=.20&&x.posSupport>=.42&&repeatTargetCount/Math.max(1,transitions.length)>=.30&&!sourceRepeatBlocked)
+    .sort((a,b)=>b.points-a.points||b.digitRate-a.digitRate)[0];
+  const exact=out.filter(x=>x.rawCount>=1&&x.digitRate>=.08&&x.dualTop3&&x.posSupport>=.40&&repeatTargetCount/Math.max(1,transitions.length)>=.25&&!sourceRepeatBlocked)
+    .sort((a,b)=>(b.digitRate+b.points)-(a.digitRate+a.points)||b.posSupport-a.posSupport)[0];
+  const top=exact||stable||out[0];if(!top)return null;
+  const second=out.find(x=>x.digit!==top.digit||x.shape!==top.shape);
+  const margin=top.points/Math.max(1e-6,second?.points||top.points),confidence=top.points*Math.min(1.30,margin);
+  const exactRecurrence=!!exact&&top===exact;
+  const stableShape=!!stable&&top===stable;
+  const eligible=exactRecurrence||stableShape;
+  return {...top,margin,confidence,eligible,exactRecurrence,stableShape,runnerUp:second||null,candidates:out,
+    repeatTargetCount,carryRepeatCount,repeatTargetRate:repeatTargetCount/Math.max(1,transitions.length),carryRepeatRate:carryRepeatCount/Math.max(1,repeatTargetCount),currentSourceSignature,currentSourceHasRepeat,sourceShapeSamples,sourceShapeRepeatCount,sourceShapeRepeatRate,sourceRepeatBlocked};
 }
 
 function chooseTwinDigit(candidate, finalDigits, latest, akle){
@@ -9839,7 +9917,15 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   const allowed = uniqueDigits(finalDigits);
   const counts = countMap(a);
   const twins = Object.keys(counts).map(Number).filter(d => counts[d] >= 2);
-  const repeatShapeCalibration=buildRepeatShapeCalibration(candidate,allowed,akle);
+  const repeatShapeCalibration=buildRepeatShapeCalibration(candidate,allowed,akle,latest);
+  const latestSetForRepeat=new Set(a);
+  const allowedTwinRank=ranked.filter(x=>allowed.includes(x.digit));
+  const twinTopPoints=Math.max(1,Number(allowedTwinRank?.[0]?.points||0));
+  let carryRepeatCandidate=null;
+  if(!repeatShapeCalibration?.sourceRepeatBlocked&&repeatShapeCalibration?.repeatTargetCount>=3&&repeatShapeCalibration.repeatTargetRate>=.28&&repeatShapeCalibration.carryRepeatRate>=.55){
+    carryRepeatCandidate=allowedTwinRank.filter(x=>latestSetForRepeat.has(x.digit)&&x.points>=twinTopPoints*.80)
+      .sort((x,y)=>y.points-x.points||x.digit-y.digit)[0]?.digit??null;
+  }
   const root = digitalRoot(sumDigits(latest));
   const profile = candidate.twinCycleProfile || {};
   const market = candidate.marketProfile || {};
@@ -10035,9 +10121,11 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   if(chosen == null && boundaryRootTwin != null && allowed.includes(boundaryRootTwin) && ((candidate.targetBoundaryRootTwinBridgeTwinScore || [])[boundaryRootTwin] || 0) >= 2600){
     chosen = boundaryRootTwin;
   }
-  if(repeatShapeCalibration?.eligible&&allowed.includes(repeatShapeCalibration.digit)&&repeatShapeCalibration.confidence>=.36){
+  if(repeatShapeCalibration?.eligible&&allowed.includes(repeatShapeCalibration.digit)&&
+      (repeatShapeCalibration.exactRecurrence||repeatShapeCalibration.confidence>=.36)){
     chosen=repeatShapeCalibration.digit;
   }
+  if(carryRepeatCandidate!=null&&allowed.includes(carryRepeatCandidate))chosen=carryRepeatCandidate;
   const replayTwinTop = DIGITS
     .filter(d => allowed.includes(d))
     .map(d => ({digit:d, points:candidate.replayProfile?.twinScore?.[d] || 0}))
@@ -10065,7 +10153,7 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   }
   if(chosen == null) chosen = sortedAllowed[0]?.digit ?? allowed[0] ?? sorted[0]?.digit ?? 0;
   if(!allowed.includes(chosen)) chosen = sortedAllowed[0]?.digit ?? allowed[0] ?? chosen;
-  // V12.1 Repeat abstention: jangan selalu mengeluarkan dd. Bentuk repeat harus mempunyai
+  // V12.2 Repeat-role consensus: jangan selalu mengeluarkan dd. Bentuk repeat harus mempunyai
   // replay posisi yang nyata; AK/LE yang kebetulan mengulang tidak cukup.
   const shapeStrong=!!repeatShapeCalibration?.eligible&&repeatShapeCalibration.confidence>=0.46&&
     repeatShapeCalibration.rawCount>=2&&repeatShapeCalibration.digitRate>=0.06;
@@ -10079,14 +10167,17 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
   const bridgeStrong=bridgeRawStrong&&Number(repeatShapeCalibration?.rawCount||0)>=2&&
     Number(repeatShapeCalibration?.shapeRate||0)>=0.22&&Number(repeatShapeCalibration?.digitRate||0)>=0.06&&
     Number(repeatShapeCalibration?.posSupport||0)>=0.52;
-  const repeatAllowed=shapeStrong||bridgeStrong;
+  const exactRecurrenceStrong=!!repeatShapeCalibration?.exactRecurrence&&repeatShapeCalibration.digitRate>=.08&&repeatShapeCalibration.dualTop3;
+  const carryRepeatStrong=carryRepeatCandidate!=null&&repeatShapeCalibration?.repeatTargetCount>=3&&repeatShapeCalibration.carryRepeatRate>=.55;
+  const sourceShapeCooldown=!!repeatShapeCalibration?.sourceRepeatBlocked&&!(repeatShapeCalibration.rawCount>=3&&repeatShapeCalibration.digitRate>=.15&&repeatShapeCalibration.shapeRate>=.30);
+  const repeatAllowed=(shapeStrong||bridgeStrong||exactRecurrenceStrong||carryRepeatStrong)&&!sourceShapeCooldown;
   if(!repeatAllowed)chosen=null;
   candidate.twinAudit = {
     chosen,
     ranked: sorted.map(x => ({digit:x.digit, points:x.points, reasons:x.reasons})),
     cooldown:candidate.twinCooldown,
     repeatShapeCalibration,
-    decision:`V12.1 repeat-shape ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; ${repeatAllowed?'repeat lolos':'abstain—bukti repeat belum cukup'}.`
+    decision:`V12.2 repeat-role ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; ${repeatAllowed?'repeat lolos':'abstain—bukti repeat belum cukup'}.`
   };
   return chosen;
 }
@@ -10795,7 +10886,7 @@ function renderResult(r){
       <div class="digits">${digitsHtml}</div>
       <div class="five-strong-box"><small>5 Digit Terkuat</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar rumus</small><b>${r.twinDigit==null?'Tidak ada kembar kuat':`${r.twinDigit}${r.twinDigit}`}</b></div>
-      <p class="tagline">Engine V12.1 memulai dari full-history scan. Top-1 posisi yang sudah terpilih dilindungi, carry portfolio hanya aktif bila carry-router ACTIVE, seluruh rescue dibatasi maksimal dua swap, dan kembar boleh abstain bila bentuk repeat tidak cukup kuat.</p>
+      <p class="tagline">Engine V12.2 memulai dari full-history scan. Repeat dinilai dari bentuk posisi, recurrence digit, dan carry-role historis; substitusi sesama carry hanya boleh melalui pasangan utama tanpa menambah carry atau melanggar rescue budget.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}
