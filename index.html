@@ -4,74 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IPHOEL PREDICTION</title>
-  <link rel="stylesheet" href="style.css?v=12.5.0" />
+  <link rel="stylesheet" href="style.css?v=13.0.0" />
 </head>
 <body>
   <div class="app-shell">
     <header class="hero">
-      <div class="brand-row">
-        <span class="brand-mark">∑</span>
-        <h1>IPHOEL PREDICTION</h1>
-      </div>
+      <div class="brand-row"><span class="brand-mark">∑</span><h1>IPHOEL PREDICTION</h1></div>
       <div class="version-pill" id="versionPill">Formula Engine</div>
     </header>
-
     <section class="notice">
-      <b>Catatan:</b> keluaran angka tetap bersifat acak. Sira Scanner Lokal memproses seluruh riwayat di perangkat. Lapisan A adalah kandidat utama; Lapisan B adalah portofolio recovery bersyarat yang boleh overlap terkontrol. Replay historis tidak menjamin hasil berikutnya.
+      <b>Formula-First Reset:</b> mesin hanya memakai formula generik yang lolos replay historis. Tidak ada rescue berbasis hasil aktual, nama market, atau digit tertentu. Bila sinyal lemah, aplikasi menyatakannya secara terbuka. Hasil tetap eksploratif dan tidak menjamin keluaran berikutnya.
     </section>
-
     <main class="layout">
       <section class="panel input-panel">
-        <div class="panel-head">
-          <div>
-            <span class="mini-title">Data Historis</span>
-            <h2>Input Keluaran</h2>
-          </div>
-          <span class="pill muted" id="rowCounter">0 baris</span>
-        </div>
+        <div class="panel-head"><div><span class="mini-title">Data Historis</span><h2>Input Keluaran</h2></div><span class="pill muted" id="rowCounter">0 baris</span></div>
         <div class="scanner-frame" id="scannerFrame">
-          <textarea id="dataInput" spellcheck="false" placeholder="Tempel data seperti ini:
-3 Kamis, 25/Jun/2026 SYD [2306] 2 0 1 3
-4 Rabu, 24/Jun/2026 SYD [2305] 9 1 7 7
-5 Selasa, 23/Jun/2026 SYD [2304] 6 8 6 0"></textarea>
-          <div class="history-scan-overlay" aria-hidden="true">
-            <span class="scan-edge scan-edge-left"></span>
-            <span class="scan-edge scan-edge-right"></span>
-            <span class="scan-beam"></span>
-          </div>
+          <textarea id="dataInput" spellcheck="false" placeholder="Tempel 50–56 baris satu market. Baris terbaru boleh berada di atas."></textarea>
+          <div class="history-scan-overlay" aria-hidden="true"><span class="scan-edge scan-edge-left"></span><span class="scan-edge scan-edge-right"></span><span class="scan-beam"></span></div>
         </div>
         <div class="scanner-console" aria-live="polite">
-          <div>
-            <small>Sira Scanner Lokal</small>
-            <b id="scannerStatus">Menunggu data • 0 baris</b>
-          </div>
+          <div><small>Sira Scanner Lokal</small><b id="scannerStatus">Menunggu data • 0 baris</b></div>
           <span class="scanner-cursor" id="scannerCursor">0/0</span>
           <div class="scanner-meter"><span id="scannerMeter"></span></div>
         </div>
-        <div class="single-action">
-          <button class="btn danger" id="btnClear">Reset / Bersihkan</button>
-        </div>
+        <div class="single-action"><button class="btn danger" id="btnClear">Reset / Bersihkan</button></div>
       </section>
-
       <section class="panel output-panel">
-        <div class="panel-head">
-          <div>
-            <span class="mini-title">Output Formula</span>
-            <h2>Hasil Pembacaan</h2>
-          </div>
-          <span class="pill" id="modelPill">IPHOEL Formula V4</span>
-        </div>
-        <div id="output" class="empty-state">
-          <div>
-            <div class="empty-icon">Φ</div>
-            <h3>Belum ada data</h3>
-            <p>Tempel data historis. Analisis berjalan otomatis.</p>
-          </div>
-        </div>
+        <div class="panel-head"><div><span class="mini-title">Output Formula</span><h2>Hasil Pembacaan</h2></div><span class="pill" id="modelPill">Formula-First</span></div>
+        <div id="output" class="empty-state"><div><div class="empty-icon">Φ</div><h3>Belum ada data</h3><p>Tempel data historis. Analisis berjalan otomatis.</p></div></div>
       </section>
     </main>
   </div>
-
-  <script src="script.js?v=12.5.0"></script>
+  <script src="script.js?v=13.0.0"></script>
 </body>
 </html>
