@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V12.4 • Conditional Recovery Portfolio + Recovery Twin';
+const APP_VERSION = 'IPHOEL Formula Engine V12.5 • Miss-Directed Recovery + Adaptive Overlap';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
@@ -246,7 +246,7 @@ function buildFormulaPrediction(inputRows){
   const finalDigits = chooseFormulaDigitsDecisionEngine(candidate, latest, akle);
   const strongFiveDigits = chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits);
   const twinDigit = chooseTwinDigit(candidate, finalDigits, latest, akle);
-  // V12.4: lapisan recovery tidak mengubah keputusan utama. Ia dilatih khusus pada replay
+  // V12.5: lapisan recovery tidak mengubah keputusan utama. Ia dilatih khusus pada replay
   // ketika lima digit utama gagal mencapai ambang tiga digit, dengan overlap terkontrol
   // agar pola 2-2 tidak membuat kedua lapisan gagal bersamaan.
   const backupFiveDigits = chooseBackupFiveDigitsDecisionEngine(candidate, finalDigits, strongFiveDigits, latest, akle, rows, targetDay);
@@ -8648,7 +8648,7 @@ function buildWalkForwardRouterJudgeProfile(rows,latest,targetDay){
   const rank=DIGITS.map(d=>({digit:d,norm:ensemble[d]||0,consensus:consensus[d]})).sort((a,b)=>b.norm-a.norm||b.consensus-a.consensus||a.digit-b.digit);
   return {transitions,validation,stats,current,ensemble,rank,consensus,status,ensembleAvg,baseAvg,bestAvg,improved,worse,flat};
 }
-function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.4 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
+function applyWalkForwardRouterJudge(candidate,rows,latest,targetDay){const p=buildWalkForwardRouterJudgeProfile(rows,latest,targetDay);candidate.walkForwardRouterJudge=p;candidate.walkForwardRouterJudgeAudit={title:`V12.5 Router Judge: ${p.transitions.length} transisi ${latest?.day||'-'}→${targetDay||'-'} • ${p.status}`,routers:Object.entries(p.stats).map(([k,v])=>`${k} ${(100*v.avg).toFixed(1)}% • w ${v.weight.toFixed(3)}`),result:`ensemble ${(100*p.ensembleAvg).toFixed(1)}% vs frequency ${(100*p.baseAvg).toFixed(1)}% • +${p.improved}/=${p.flat}/-${p.worse}`,top:p.rank.slice(0,6).map(x=>`${x.digit}: ${(100*x.norm).toFixed(1)}% • ${x.consensus} router`)};}
 function buildWalkForwardRouterJudgeAudit(a){if(!a)return null;return {title:a.title,routers:a.routers,result:a.result,top:a.top};}
 
 function carryBudgetProfile(profile,carryCap){
@@ -9147,7 +9147,7 @@ function chooseFormulaDigitsDecisionEngine(candidate, latest, akle){
     emergenceTop:(emergence?.rank||[]).slice(0,6),
     gateAllowed:(candidate.formulaGate?.allowed||[]).map(x=>x.label),gateBlocked:(candidate.formulaGate?.blocked||[]).map(x=>x.label),
     latestSet:latestSet.slice(),positionCore:[...positionCore],emergencePromoted:uniqueDigits(emergencePromoted),exactPositionLeaders:emergencePositionLeaders,exactPositionPromoted,familyFrontierPromoted,crossPositionPromoted,carryRolePromoted,pairCarryPromoted,metaPromoted,
-    note:`V12.4: keputusan utama tetap memakai protected position, repeat-role, pair-anchored carry, dan rescue budget; lapisan recovery tidak boleh mengubah hasil utama. Carry cap tetap maksimum, bukan kuota. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
+    note:`V12.5: keputusan utama tetap memakai protected position, repeat-role, pair-anchored carry, dan rescue budget; lapisan recovery tidak boleh mengubah hasil utama. Carry cap tetap maksimum, bukan kuota. Final coverage ${selected.filter(d=>topCoverageSet.has(d)).length}/${quorumTarget}, carry ${finalCarry}/${carryCap}, expected ${carryBudget.expected.toFixed(2)}.`
   };
   return selected;
 }
@@ -9204,53 +9204,77 @@ function chooseStrongFiveDigitsDecisionEngine(candidate, finalDigits){
 }
 
 
-// V12.4 Conditional Recovery Portfolio.
-// Lapisan B bukan lagi komplemen 0-9. Ia dilatih pada replay ketika Lapisan A gagal
-// mencapai ambang tiga digit unik. Overlap 2-3 digit diperbolehkan agar hasil aktual
-// tidak mudah terbelah 2-2 di antara dua lapisan.
+// V12.5 Miss-Directed Recovery Portfolio.
+// Lapisan B tidak sekadar mengulang anchor Lapisan A. Ia belajar dari digit yang benar-benar
+// hilang pada replay walk-forward ketika proxy Lapisan A historis gagal mencapai tiga digit.
+// Overlap 2-3 digit dipilih adaptif: kegagalan berat membuka lebih banyak slot outsider.
+function recoveryStructureSimilarity(a,b){
+  a=(a||[]).map(Number);b=(b||[]).map(Number);
+  const ua=new Set(a),ub=new Set(b),union=new Set([...ua,...ub]);
+  const jaccard=[...ua].filter(x=>ub.has(x)).length/Math.max(1,union.size);
+  const zero=1-Math.min(1,Math.abs(a.filter(x=>x===0).length-b.filter(x=>x===0).length)/3);
+  const repeat=1-Math.min(1,Math.abs((4-ua.size)-(4-ub.size))/3);
+  const parity=a.length===4&&b.length===4?a.reduce((z,x,i)=>z+(x%2===b[i]%2?1:0),0)/4:0;
+  const root=x=>{const n=(x||[]).reduce((z,d)=>z+Number(d||0),0);return n===0?0:1+((n-1)%9);};
+  const rootNear=1-Math.min(1,Math.abs(root(a)-root(b))/9);
+  return .34*jaccard+.16*zero+.16*repeat+.14*parity+.20*rootNear;
+}
+
+function buildHistoricalPrimaryProxy(training,source){
+  if((training||[]).length<3)return null;
+  const frequency=wfFrequency(training);
+  const position=wfPosition(training).score;
+  const transform=wfTransform(training,source);
+  const carry=wfCarry(training,source).score;
+  const analogRaw=Array(10).fill(0);
+  let analogDen=0;
+  (training||[]).forEach((tr,i)=>{
+    const recency=.72+.28*(i+1)/Math.max(1,training.length);
+    const sim=recoveryStructureSimilarity(source?.digits||[],tr.source?.digits||[]);
+    const w=recency*(.28+.72*sim);
+    analogDen+=w;
+    uniqueDigits(tr.target?.digits||[]).forEach(d=>analogRaw[d]+=w);
+  });
+  const analog=wfNormalize(analogRaw);
+  const score=DIGITS.map(d=>
+    .23*(frequency[d]||0)+.18*(position[d]||0)+.24*(transform[d]||0)+
+    .13*(carry[d]||0)+.22*(analog[d]||0)
+  );
+  return DIGITS.slice().sort((a,b)=>score[b]-score[a]||a-b).slice(0,5);
+}
+
 function buildConditionalRecoveryReplayCases(rows, latest, targetDay, primaryDigits){
-  const primarySet=new Set(uniqueDigits(primaryDigits||[]));
+  const currentPrimary=new Set(uniqueDigits(primaryDigits||[]));
   const chrono=(rows||[]).slice().reverse();
   const pairs=[];
   for(let i=0;i<chrono.length-1;i++){
     const source=chrono[i],target=chrono[i+1];
-    if(source?.day===latest?.day&&target?.day===targetDay){
-      pairs.push({source,target});
-    }
+    if(source?.day===latest?.day&&target?.day===targetDay)pairs.push({source,target});
   }
-  // Urutkan terbaru dahulu agar replay dekat mendapat bobot sedikit lebih tinggi.
-  pairs.reverse();
-  const current=latest?.digits||[];
-  const structureSimilarity=(a,b)=>{
-    a=(a||[]).map(Number);b=(b||[]).map(Number);
-    const ua=new Set(a),ub=new Set(b),union=new Set([...ua,...ub]);
-    const jaccard=[...ua].filter(x=>ub.has(x)).length/Math.max(1,union.size);
-    const zero=1-Math.min(1,Math.abs(a.filter(x=>x===0).length-b.filter(x=>x===0).length)/3);
-    const repeat=1-Math.min(1,Math.abs((4-ua.size)-(4-ub.size))/3);
-    const parity=a.length===4&&b.length===4?a.reduce((z,x,i)=>z+(x%2===b[i]%2?1:0),0)/4:0;
-    const root=x=>{const n=(x||[]).reduce((z,d)=>z+Number(d||0),0);return n===0?0:1+((n-1)%9);};
-    const rootNear=1-Math.min(1,Math.abs(root(a)-root(b))/9);
-    return .34*jaccard+.16*zero+.16*repeat+.14*parity+.20*rootNear;
-  };
-  const cases=pairs.map((pair,age)=>{
-    const actual=uniqueDigits(pair.target?.digits||[]);
-    const actualSet=new Set(actual);
-    const hitA=actual.reduce((z,d)=>z+(primarySet.has(d)?1:0),0);
+  const cases=[];
+  for(let i=3;i<pairs.length;i++){
+    const pair=pairs[i],training=pairs.slice(0,i);
+    const proxy=buildHistoricalPrimaryProxy(training,pair.source);
+    if(!proxy)continue;
+    const proxySet=new Set(proxy);
+    const actual=uniqueDigits(pair.target?.digits||[]),actualSet=new Set(actual);
+    const hitA=actual.reduce((z,d)=>z+(proxySet.has(d)?1:0),0);
     const need=Math.min(3,actual.length);
-    const sim=structureSimilarity(current,pair.source?.digits||[]);
-    const weight=Math.pow(.90,age)*(.58+.42*sim);
-    return {source:pair.source,target:pair.target,actual,actualSet,hitA,need,weight,age,similarity:sim,pseudo:false};
-  });
-  // Jika transisi source-day→target-day terlalu sedikit, tambahkan anchor target-day
-  // sebagai sampel sekunder. Bobotnya lebih rendah agar tidak mengalahkan replay transisi.
-  if(cases.length<4){
-    const used=new Set(cases.map(x=>`${x.target?.date}|${x.target?.period}|${(x.target?.digits||[]).join('')}`));
-    (rows||[]).filter(r=>r?.day===targetDay).forEach((target,idx)=>{
-      const key=`${target?.date}|${target?.period}|${(target?.digits||[]).join('')}`;
-      if(used.has(key))return;
-      const actual=uniqueDigits(target?.digits||[]),actualSet=new Set(actual);
-      const hitA=actual.reduce((z,d)=>z+(primarySet.has(d)?1:0),0);
-      cases.push({source:null,target,actual,actualSet,hitA,need:Math.min(3,actual.length),weight:.34*Math.pow(.92,idx),age:cases.length+idx,similarity:0,pseudo:true});
+    const miss=actual.filter(d=>!proxySet.has(d));
+    const sim=recoveryStructureSimilarity(latest?.digits||[],pair.source?.digits||[]);
+    const age=pairs.length-1-i;
+    const weight=Math.pow(.90,age)*(.54+.46*sim);
+    cases.push({source:pair.source,target:pair.target,actual,actualSet,proxy,proxySet,miss,missSet:new Set(miss),hitA,need,weight,age,similarity:sim,pseudo:false});
+  }
+  // Fallback jika jumlah walk-forward terlalu sedikit. Sampel ini hanya sekunder dan memakai
+  // Lapisan A saat ini, sehingga bobotnya jauh lebih rendah daripada proxy out-of-sample.
+  if(cases.length<3){
+    pairs.slice().reverse().forEach((pair,age)=>{
+      const actual=uniqueDigits(pair.target?.digits||[]),actualSet=new Set(actual);
+      const hitA=actual.reduce((z,d)=>z+(currentPrimary.has(d)?1:0),0);
+      const miss=actual.filter(d=>!currentPrimary.has(d));
+      const sim=recoveryStructureSimilarity(latest?.digits||[],pair.source?.digits||[]);
+      cases.push({source:pair.source,target:pair.target,actual,actualSet,proxy:Array.from(currentPrimary),proxySet:currentPrimary,miss,missSet:new Set(miss),hitA,need:Math.min(3,actual.length),weight:.26*Math.pow(.91,age)*(.58+.42*sim),age,similarity:sim,pseudo:true});
     });
   }
   return cases;
@@ -9289,6 +9313,21 @@ function chooseBackupFiveDigitsDecisionEngine(candidate, finalDigits, strongFive
     const maxHist=Math.max(1,...(candidate?.marketProfile?.carryDigitCounts||[1]));
     return .62*Number(raw||0)+.38*Number(hist||0)/maxHist;
   };
+  const cases=buildConditionalRecoveryReplayCases(rows,latest,targetDay,primary);
+  let failureCases=cases.filter(x=>x.need>0&&x.hitA<x.need);
+  if(failureCases.length<2)failureCases=cases.filter(x=>x.need>0&&x.hitA<=x.need);
+  if(!failureCases.length)failureCases=cases.slice();
+  const totalFail=Math.max(.0001,failureCases.reduce((z,x)=>z+x.weight,0));
+  const avgPrimaryHit=failureCases.reduce((z,x)=>z+x.weight*x.hitA,0)/totalFail;
+  const avgMissing=failureCases.reduce((z,x)=>z+x.weight*x.miss.length,0)/totalFail;
+  const severeRate=failureCases.reduce((z,x)=>z+x.weight*(x.hitA<=1?1:0),0)/totalFail;
+  const missRate=Array(10).fill(0),actualRate=Array(10).fill(0);
+  failureCases.forEach(c=>{
+    c.actual.forEach(d=>actualRate[d]+=c.weight);
+    c.miss.forEach(d=>missRate[d]+=c.weight);
+  });
+  DIGITS.forEach(d=>{actualRate[d]/=totalFail;missRate[d]/=totalFail;});
+
   const residualItems=DIGITS.map(d=>{
     const decisionNorm=Math.max(0,Number(decision[d]||0))/maxDecision;
     const coverageNorm=Math.max(0,Number(history?.coverage?.[d]||0))/maxCoverage;
@@ -9299,52 +9338,62 @@ function chooseBackupFiveDigitsDecisionEngine(candidate, finalDigits, strongFive
     const positionSupport=Math.min(1,(top3PositionCount(d)+.70*exactPositionCount(d))/3.2);
     const pairSupport=pairWeight(d);
     const carrySupport=carryRole(d);
-    const f6Bonus=finalSet.has(d)?.12:0;
+    const f6Bonus=finalSet.has(d)?.10:0;
     const primaryRank=primary.indexOf(d);
     const primaryStrength=primaryRank<0?0:(5-primaryRank)/5;
-    const points=.28*decisionNorm+.15*coverageNorm+.16*emergenceNorm*statusFactor+
-      .14*positionSupport+.11*pairSupport+.05*routerNorm+.04*carrySupport+f6Bonus+.07*primaryStrength;
+    // Miss-directed evidence diberi bobot besar hanya pada Lapisan Recovery; ia tidak mengubah F6/A.
+    const points=.20*decisionNorm+.10*coverageNorm+.15*emergenceNorm*statusFactor+
+      .11*positionSupport+.09*pairSupport+.04*routerNorm+.04*carrySupport+f6Bonus+
+      .05*primaryStrength+.22*missRate[d];
     const reasons=[];
     if(primarySet.has(d))reasons.push('anchor Lapisan A');
     if(finalSet.has(d))reasons.push('anggota F6');
+    if(missRate[d]>=.28)reasons.push(`miss-lift ${(100*missRate[d]).toFixed(0)}%`);
     if(positionSupport>=.45)reasons.push(`top-posisi ${top3PositionCount(d)} jalur`);
     if(emergenceNorm>=.45)reasons.push(`emergence ${status}`);
     if(pairSupport>=.35)reasons.push('AK/LE unggulan');
     if(carrySupport>=.35)reasons.push('carry-role');
-    return {digit:d,points,decisionNorm,coverageNorm,emergenceNorm,status,positionSupport,pairSupport,carrySupport,primaryStrength,reasons};
+    return {digit:d,points,decisionNorm,coverageNorm,emergenceNorm,status,positionSupport,pairSupport,carrySupport,primaryStrength,missRate:missRate[d],actualRate:actualRate[d],reasons};
   });
   const residualByDigit=Object.fromEntries(residualItems.map(x=>[x.digit,x]));
-  const outsideRank=residualItems.filter(x=>!primarySet.has(x.digit)).sort((a,b)=>b.points-a.points||a.digit-b.digit);
-  // Dua slot luar selalu berasal dari kandidat residual terkuat saat ini. Tiga slot lain
-  // (atau dua pada kondisi stabil) adalah anchor overlap yang dioptimalkan dari replay gagal.
-  const mandatoryOutsiders=outsideRank.slice(0,2).map(x=>x.digit);
-  const cases=buildConditionalRecoveryReplayCases(rows,latest,targetDay,primary);
-  let failureCases=cases.filter(x=>x.need>0&&x.hitA<x.need);
-  if(failureCases.length<2)failureCases=cases.filter(x=>x.need>0&&x.hitA<=x.need);
-  if(!failureCases.length)failureCases=cases.slice();
-  const totalFail=Math.max(.0001,failureCases.reduce((z,x)=>z+x.weight,0));
-  const avgPrimaryHit=failureCases.reduce((z,x)=>z+x.weight*x.hitA,0)/totalFail;
-  // Saat kegagalan historis rata-rata hanya menangkap sekitar dua digit, recovery layer
-  // membutuhkan tiga anchor overlap. Jika Lapisan A lebih stabil, cukup dua anchor.
-  const overlapBudget=avgPrimaryHit<=2.15?3:2;
+  // Target dengan repeat tinggi membutuhkan lebih banyak anchor overlap karena hasil aktual
+  // sering hanya mempunyai 2-3 digit unik. Target yang dominan 4 digit unik memakai mode
+  // miss-directed: dua anchor + tiga outsider.
+  const targetPairs=wfSameDayTransitions(rows,latest?.day,targetDay);
+  const repeatRateAll=targetPairs.length?targetPairs.filter(x=>uniqueDigits(x.target?.digits||[]).length<4).length/targetPairs.length:0;
+  const avgActualUniqueAll=targetPairs.length?targetPairs.reduce((z,x)=>z+uniqueDigits(x.target?.digits||[]).length,0)/targetPairs.length:4;
+  const anchorHeavy=repeatRateAll>=.38||avgActualUniqueAll<=3.35;
+  const allowedOverlaps=anchorHeavy?[3]:((avgPrimaryHit<=2.15||avgMissing>=1.75||severeRate>=.30)?[2]:[2,3]);
+  const anchorHeavyOutsiders=anchorHeavy?residualItems.filter(x=>!primarySet.has(x.digit)).sort((a,b)=>{
+    const sa=.30*a.decisionNorm+.24*a.pairSupport+.22*a.emergenceNorm+.14*a.missRate+.10*a.positionSupport;
+    const sb=.30*b.decisionNorm+.24*b.pairSupport+.22*b.emergenceNorm+.14*b.missRate+.10*b.positionSupport;
+    return sb-sa||b.points-a.points||a.digit-b.digit;
+  }).slice(0,2).map(x=>x.digit):[];
+  const anchorHeavyAnchors=anchorHeavy?residualItems.filter(x=>primarySet.has(x.digit)).sort((a,b)=>{
+    const ra=Number(judge?.ensemble?.[a.digit]||0),rb=Number(judge?.ensemble?.[b.digit]||0);
+    const sa=.50*a.actualRate+.12*a.primaryStrength+.14*a.emergenceNorm+.10*a.positionSupport+.10*ra+.04*a.pairSupport;
+    const sb=.50*b.actualRate+.12*b.primaryStrength+.14*b.emergenceNorm+.10*b.positionSupport+.10*rb+.04*b.pairSupport;
+    return sb-sa||b.points-a.points||a.digit-b.digit;
+  }).slice(0,3).map(x=>x.digit):[];
   const bandOf=(x,n)=>n<3?0:Math.min(2,Math.floor(3*x/n));
-  const combos=enumerateFiveDigitSets();
   const evaluated=[];
-  combos.forEach(set=>{
+  enumerateFiveDigitSets().forEach(set=>{
     const setSet=new Set(set);
     const overlap=set.filter(d=>primarySet.has(d)).length;
-    if(overlap!==overlapBudget)return;
+    if(!allowedOverlaps.includes(overlap))return;
     const outside=5-overlap;
     if(outside<2)return;
-    if(!mandatoryOutsiders.every(d=>setSet.has(d)))return;
-    let successW=0,perfectW=0,fourW=0,fourTotal=0,hitW=0,pairW=0;
+    if(anchorHeavy&&(anchorHeavyOutsiders.some(d=>!setSet.has(d))||anchorHeavyAnchors.some(d=>!setSet.has(d))))return;
+    let successW=0,perfectW=0,fourW=0,fourTotal=0,hitW=0,pairW=0,missHitW=0,missPossibleW=0;
     const bandTotals=[0,0,0],bandWins=[0,0,0];
     failureCases.forEach((c,i)=>{
       const hit=c.actual.reduce((z,d)=>z+(setSet.has(d)?1:0),0);
+      const missHit=c.miss.reduce((z,d)=>z+(setSet.has(d)?1:0),0);
       if(hit>=c.need)successW+=c.weight;
       if(hit===c.actual.length)perfectW+=c.weight;
       if(c.actual.length>=4){fourTotal+=c.weight;if(hit>=4)fourW+=c.weight;}
       hitW+=c.weight*(hit/Math.max(1,Math.min(4,c.actual.length)));
+      missHitW+=c.weight*missHit;missPossibleW+=c.weight*Math.max(1,c.miss.length);
       const possiblePairs=Math.max(1,c.actual.length*(c.actual.length-1)/2);
       pairW+=c.weight*((hit*(hit-1)/2)/possiblePairs);
       const b=bandOf(i,failureCases.length);bandTotals[b]+=c.weight;if(hit>=c.need)bandWins[b]+=c.weight;
@@ -9353,53 +9402,49 @@ function chooseBackupFiveDigitsDecisionEngine(candidate, finalDigits, strongFive
     const perfectRate=perfectW/totalFail;
     const fourRate=fourTotal?fourW/fourTotal:0;
     const avgHit=hitW/totalFail;
+    const missRecall=missHitW/Math.max(.0001,missPossibleW);
     const pairCapture=pairW/totalFail;
     const bandRates=bandTotals.map((v,i)=>v?bandWins[i]/v:1);
     const stability=Math.min(...bandRates);
     const outsideDigits=set.filter(d=>!primarySet.has(d));
     const anchorDigits=set.filter(d=>primarySet.has(d));
     const outsideEvidence=outsideDigits.reduce((z,d)=>z+(residualByDigit[d]?.points||0),0)/Math.max(1,outsideDigits.length);
-    const anchorEvidence=anchorDigits.reduce((z,d)=>z+(.55*(residualByDigit[d]?.points||0)+.45*(residualByDigit[d]?.primaryStrength||0)),0)/Math.max(1,anchorDigits.length);
-    // Current-context bridge: reward sets that contain digits appearing across leading AK/LE.
+    const complementEvidence=outsideDigits.reduce((z,d)=>{
+      const x=residualByDigit[d]||{};
+      const router=Number(judge?.ensemble?.[d]||0);
+      return z+.42*Number(x.emergenceNorm||0)+.22*router+.14*Number(x.positionSupport||0)+.14*Number(x.missRate||0)+.08*(1-Number(x.decisionNorm||0));
+    },0)/Math.max(1,outsideDigits.length);
+    const anchorEvidence=anchorDigits.reduce((z,d)=>z+(.45*(residualByDigit[d]?.actualRate||0)+.30*(residualByDigit[d]?.primaryStrength||0)+.25*(residualByDigit[d]?.emergenceNorm||0)),0)/Math.max(1,anchorDigits.length);
     const pairContext=set.reduce((z,d)=>z+(residualByDigit[d]?.pairSupport||0),0)/5;
-    const carryAnchor=Math.max(0,...anchorDigits.map(d=>Number(residualByDigit[d]?.carrySupport||0)));
-    const objective=.35*recoveryRate+.13*avgHit+.09*perfectRate+.07*fourRate+
-      .09*stability+.06*pairCapture+.07*outsideEvidence+.04*anchorEvidence+.03*pairContext+.07*carryAnchor;
-    evaluated.push({set,objective,recoveryRate,perfectRate,fourRate,avgHit,stability,pairCapture,outsideEvidence,anchorEvidence,overlap,outside});
+    const overlapPrior=anchorHeavy?(overlap===3?1:.55):(overlap===2?1:(avgPrimaryHit>=2.45?.95:.68));
+    const objective=.23*recoveryRate+.03*avgHit+.28*missRecall+.04*perfectRate+.02*fourRate+
+      .05*stability+.01*pairCapture+.02*outsideEvidence+.30*complementEvidence+.015*anchorEvidence+.0025*pairContext+.0025*overlapPrior;
+    evaluated.push({set,objective,recoveryRate,perfectRate,fourRate,avgHit,missRecall,stability,pairCapture,outsideEvidence,complementEvidence,anchorEvidence,overlap,outside});
   });
-  evaluated.sort((a,b)=>b.objective-a.objective||b.recoveryRate-a.recoveryRate||b.avgHit-a.avgHit||String(a.set).localeCompare(String(b.set)));
+  evaluated.sort((a,b)=>b.objective-a.objective||b.recoveryRate-a.recoveryRate||b.missRecall-a.missRecall||b.avgHit-a.avgHit||String(a.set).localeCompare(String(b.set)));
   let chosen=evaluated[0];
   if(!chosen){
     const fallback=residualItems.slice().sort((a,b)=>b.points-a.points||a.digit-b.digit).slice(0,5).map(x=>x.digit);
-    chosen={set:fallback,objective:0,recoveryRate:0,perfectRate:0,fourRate:0,avgHit:0,stability:0,pairCapture:0,overlap:fallback.filter(d=>primarySet.has(d)).length,outside:0};
+    chosen={set:fallback,objective:0,recoveryRate:0,perfectRate:0,fourRate:0,avgHit:0,missRecall:0,stability:0,pairCapture:0,overlap:fallback.filter(d=>primarySet.has(d)).length,outside:0};
   }
-  // Urutan tampilan berdasarkan kontribusi pada failure replay, kemudian bukti saat ini.
-  const contribution=d=>{
-    const freq=failureCases.reduce((z,c)=>z+c.weight*(c.actualSet.has(d)?1:0),0)/totalFail;
-    return .58*freq+.30*(residualByDigit[d]?.points||0)+.12*(primarySet.has(d)?(residualByDigit[d]?.primaryStrength||0):0);
-  };
+  const contribution=d=>.43*missRate[d]+.27*actualRate[d]+.22*(residualByDigit[d]?.points||0)+.08*(primarySet.has(d)?(residualByDigit[d]?.primaryStrength||0):0);
   const backup=chosen.set.slice().sort((a,b)=>contribution(b)-contribution(a)||(residualByDigit[b]?.points||0)-(residualByDigit[a]?.points||0)||a-b);
+  const selectedOutsiders=backup.filter(d=>!primarySet.has(d));
   const ranked=backup.map(d=>({
-    ...residualByDigit[d],
-    contribution:contribution(d),
-    role:primarySet.has(d)?'anchor-overlap':'recovery-outsider',
-    reasons:[primarySet.has(d)?'anchor overlap untuk mencegah split 2-2':'kandidat luar untuk menutup digit hilang',...(residualByDigit[d]?.reasons||[])].slice(0,4)
+    ...residualByDigit[d],contribution:contribution(d),role:primarySet.has(d)?'anchor-overlap':'miss-directed-outsider',
+    reasons:[primarySet.has(d)?'anchor overlap terukur':'outsider untuk digit miss historis',...(residualByDigit[d]?.reasons||[])].slice(0,5)
   }));
-  const recoveryRepeatCounts=Array(10).fill(0);
-  let recoveryRepeatWeight=0;
-  failureCases.forEach(c=>{
-    const counts=countMap(c.target?.digits||[]);
-    Object.entries(counts).forEach(([d,n])=>{if(Number(n)>=2){recoveryRepeatCounts[Number(d)]+=c.weight;recoveryRepeatWeight+=c.weight;}});
-  });
+  const recoveryRepeatCounts=Array(10).fill(0);let recoveryRepeatWeight=0;
+  failureCases.forEach(c=>{const counts=countMap(c.target?.digits||[]);Object.entries(counts).forEach(([d,n])=>{if(Number(n)>=2){recoveryRepeatCounts[Number(d)]+=c.weight;recoveryRepeatWeight+=c.weight;}});});
   const maxRepeat=Math.max(.0001,...recoveryRepeatCounts);
   const recoveryRepeatNorm=recoveryRepeatCounts.map(x=>x/maxRepeat);
   candidate.backupPortfolio={
-    primary:primary.slice(),backup:backup.slice(),ranked,
-    recoveryCases:failureCases.length,totalCases:cases.length,overlap:chosen.overlap,mandatoryOutsiders:mandatoryOutsiders.slice(),
-    recoveryRate:chosen.recoveryRate,perfectRate:chosen.perfectRate,fourRate:chosen.fourRate,
-    avgHit:chosen.avgHit,stability:chosen.stability,objective:chosen.objective,
+    primary:primary.slice(),backup:backup.slice(),ranked,recoveryCases:failureCases.length,totalCases:cases.length,
+    proxyCases:cases.filter(x=>!x.pseudo).length,overlap:chosen.overlap,selectedOutsiders,anchorHeavy,anchorHeavyAnchors,repeatRateAll,avgActualUniqueAll,
+    recoveryRate:chosen.recoveryRate,perfectRate:chosen.perfectRate,fourRate:chosen.fourRate,avgHit:chosen.avgHit,
+    missRecall:chosen.missRecall,avgPrimaryHit,avgMissing,severeRate,stability:chosen.stability,objective:chosen.objective,
     recoveryRepeatCounts,recoveryRepeatNorm,recoveryRepeatWeight,
-    note:'Lapisan B adalah Conditional Recovery Portfolio. Ia boleh overlap 2-3 digit dengan Lapisan A dan dilatih khusus pada replay ketika Lapisan A gagal mencapai tiga digit.'
+    note:`Lapisan B memakai ${anchorHeavy?'Anchor-Heavy Recovery':'Miss-Directed Recovery'}. Mode dipilih dari repeat-rate dan rata-rata digit unik target; hasil utama tidak diubah.`
   };
   return backup;
 }
@@ -9453,12 +9498,12 @@ function chooseBackupTwinDigit(candidate, backupDigits, primaryTwinDigit, latest
 function buildBackupPortfolioAudit(portfolio){
   if(!portfolio)return null;
   return {
-    title:'V12.4 Conditional Recovery Portfolio',
+    title:'V12.5 Miss-Directed Recovery Portfolio',
     primary:(portfolio.primary||[]).join(' '),
     backup:(portfolio.backup||[]).join(' '),
     ranked:(portfolio.ranked||[]).slice(0,5).map(x=>`${x.digit}: ${(100*x.points).toFixed(1)} • ${(x.reasons||[]).slice(0,3).join(', ')}`),
     backupTwin:portfolio.backupTwin==null?'Tidak ada kembar recovery layak':`${portfolio.backupTwin}${portfolio.backupTwin}`,
-    recovery:`${portfolio.recoveryCases||0} replay gagal • recovery ≥3: ${((portfolio.recoveryRate||0)*100).toFixed(1)}% • overlap ${portfolio.overlap||0} • outsider ${((portfolio.mandatoryOutsiders)||[]).join(' ')}`,
+    recovery:`${portfolio.recoveryCases||0} replay gagal (${portfolio.proxyCases||0} walk-forward) • recovery ≥3: ${((portfolio.recoveryRate||0)*100).toFixed(1)}% • miss recall ${((portfolio.missRecall||0)*100).toFixed(1)}% • overlap ${portfolio.overlap||0} • outsider ${((portfolio.selectedOutsiders)||[]).join(' ')}`,
     stability:`stabilitas depth ${((portfolio.stability||0)*100).toFixed(1)}% • rata-rata hit ${Number(portfolio.avgHit||0).toFixed(2)}`,
     backupTwinNote:portfolio.backupTwinNote||'',
     note:portfolio.note||''
@@ -9468,7 +9513,7 @@ function buildBackupPortfolioAudit(portfolio){
 function buildDecisionEngineAudit(audit){
   if(!audit || !audit.ranked) return null;
   return {
-    title:'Decision Engine V12.4: protected core → repeat/carry arbitration → conditional recovery',
+    title:'Decision Engine V12.5: protected core → repeat/carry arbitration → miss-directed recovery',
     selected:(audit.selected || []).join(' '),
     strongFive:(audit.strongFive || []).join(' '),
     top:audit.ranked.slice(0,10).map(x => `${x.digit}:${Math.round(x.points)} (${(x.reasons || []).slice(0,3).join(', ') || '-'})`),
@@ -10447,7 +10492,7 @@ function chooseTwinDigit(candidate, finalDigits, latest, akle){
     ranked: sorted.map(x => ({digit:x.digit, points:x.points, reasons:x.reasons})),
     cooldown:candidate.twinCooldown,
     repeatShapeCalibration,
-    decision:`V12.4 repeat-role ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; ${repeatAllowed?'repeat lolos':'abstain—bukti repeat belum cukup'}.`
+    decision:`V12.5 repeat-role ${repeatShapeCalibration?.shape||'-'} conf ${repeatShapeCalibration?(100*repeatShapeCalibration.confidence).toFixed(1):'0.0'}%; ${repeatAllowed?'repeat lolos':'abstain—bukti repeat belum cukup'}.`
   };
   return chosen;
 }
@@ -11076,7 +11121,7 @@ function renderResult(r){
   const emergenceHtml = r.audit.sourceTransformEmergence ? `<div><b>Source-Transform Emergence</b><ul class="process-list small"><li>${escapeHtml(r.audit.sourceTransformEmergence.title)}</li>${(r.audit.sourceTransformEmergence.top||[]).slice(0,8).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.sourceTransformEmergence.detail||'')}</li></ul></div>` : '';
   const routerJudgeHtml = r.audit.walkForwardRouterJudge ? `<div><b>Walk-Forward Router Judge</b><ul class="process-list small"><li>${escapeHtml(r.audit.walkForwardRouterJudge.title)}</li>${(r.audit.walkForwardRouterJudge.routers||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>${escapeHtml(r.audit.walkForwardRouterJudge.result||'')}</li>${(r.audit.walkForwardRouterJudge.top||[]).slice(0,6).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const decisionEngineHtml = r.audit.decisionEngine ? `<div><b>Decision Engine</b><ul class="process-list small"><li>${escapeHtml(r.audit.decisionEngine.title)}</li><li>Terpilih 6 digit: ${escapeHtml(r.audit.decisionEngine.selected)}</li><li>5 digit terkuat: ${escapeHtml(r.audit.decisionEngine.strongFive || '')}</li><li>5 digit backup: ${escapeHtml(r.audit.decisionEngine.backup || '')}</li><li>Coverage / emergence: ${escapeHtml(r.audit.decisionEngine.coverageDecision || '-')}</li><li>Router rescue: ${escapeHtml(r.audit.decisionEngine.routerRescue || 'tidak aktif')}</li><li>Twin-release family frontier: ${escapeHtml(r.audit.decisionEngine.familyFrontier || 'tidak aktif')}</li><li>Carry budget: ${escapeHtml(r.audit.decisionEngine.carry || '-')}</li><li>Formula gate: ${escapeHtml(r.audit.decisionEngine.gate || '-')}</li>${r.audit.decisionEngine.top.slice(0,8).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
-  const backupPortfolioHtml = r.audit.backupPortfolio ? `<div><b>Conditional Recovery Portfolio</b><ul class="process-list small"><li>${escapeHtml(r.audit.backupPortfolio.title)}</li><li>Lapisan A: ${escapeHtml(r.audit.backupPortfolio.primary)}</li><li>Recovery 5: ${escapeHtml(r.audit.backupPortfolio.backup)}</li><li>${escapeHtml(r.audit.backupPortfolio.recovery||'')}</li><li>${escapeHtml(r.audit.backupPortfolio.stability||'')}</li>${(r.audit.backupPortfolio.ranked||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>Kembar recovery: ${escapeHtml(r.audit.backupPortfolio.backupTwin)}</li><li>${escapeHtml(r.audit.backupPortfolio.backupTwinNote||'')}</li><li>${escapeHtml(r.audit.backupPortfolio.note||'')}</li></ul></div>` : '';
+  const backupPortfolioHtml = r.audit.backupPortfolio ? `<div><b>Miss-Directed Recovery Portfolio</b><ul class="process-list small"><li>${escapeHtml(r.audit.backupPortfolio.title)}</li><li>Lapisan A: ${escapeHtml(r.audit.backupPortfolio.primary)}</li><li>Recovery 5: ${escapeHtml(r.audit.backupPortfolio.backup)}</li><li>${escapeHtml(r.audit.backupPortfolio.recovery||'')}</li><li>${escapeHtml(r.audit.backupPortfolio.stability||'')}</li>${(r.audit.backupPortfolio.ranked||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}<li>Kembar recovery: ${escapeHtml(r.audit.backupPortfolio.backupTwin)}</li><li>${escapeHtml(r.audit.backupPortfolio.backupTwinNote||'')}</li><li>${escapeHtml(r.audit.backupPortfolio.note||'')}</li></ul></div>` : '';
   const worldReplayHtml = r.audit.worldReplay ? `<div><b>World formula replay</b><ul class="process-list small"><li>${escapeHtml(r.audit.worldReplay.title)}</li><li>Digit: ${escapeHtml(r.audit.worldReplay.digits)}</li><li>Twin: ${escapeHtml(r.audit.worldReplay.twin)}</li><li>AK replay: ${escapeHtml(r.audit.worldReplay.ak)}</li><li>LE replay: ${escapeHtml(r.audit.worldReplay.le)}</li>${(r.audit.worldReplay.samples || []).slice(0,4).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const marketHtml = r.audit.marketProfile ? `<div><b>Market adaptive memory</b><ul class="process-list small"><li>${escapeHtml(r.audit.marketProfile.title)}</li><li>Digit: ${escapeHtml(r.audit.marketProfile.digits)}</li><li>Twin: ${escapeHtml(r.audit.marketProfile.twin)}</li><li>AK template: ${escapeHtml(r.audit.marketProfile.ak)}</li><li>LE template: ${escapeHtml(r.audit.marketProfile.le)}</li>${(r.audit.marketProfile.samples || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>` : '';
   const processHtml = r.audit.process ? `<div class="section"><h3>Jejak Pembacaan Pelan</h3>
@@ -11160,12 +11205,12 @@ function renderResult(r){
       <div class="five-strong-box"><small>5 Digit Terkuat • Lapisan A</small><div class="digits compact">${fiveDigitsHtml}</div></div>
       <div class="twin-box"><small>Kandidat kembar utama</small><b>${r.twinDigit==null?'Tidak ada kembar kuat':`${r.twinDigit}${r.twinDigit}`}</b></div>
       <div class="backup-card">
-        <div class="backup-head"><div><small>Lapisan B • Conditional Miss Recovery</small><b>5 Digit Recovery</b></div><span class="backup-risk">Recovery</span></div>
+        <div class="backup-head"><div><small>Lapisan B • Miss-Directed Recovery</small><b>5 Digit Recovery</b></div><span class="backup-risk">Recovery</span></div>
         <div class="digits backup-digits">${backupDigitsHtml}</div>
         <div class="backup-twin-box"><small>Kembar Recovery</small><b>${r.backupTwinDigit==null?'Tidak ada kembar recovery layak':`${r.backupTwinDigit}${r.backupTwinDigit}`}</b></div>
-        <p>Recovery 5 boleh overlap 2–3 digit dengan Lapisan A. Kombinasinya dipilih dari replay ketika Lapisan A historis gagal mencapai tiga digit; ia tetap tidak mengubah 6D, AK, atau LE.</p><div class="recovery-stats"><span>Replay gagal: ${r.candidate?.backupPortfolio?.recoveryCases||0}</span><span>Recovery ≥3: ${((r.candidate?.backupPortfolio?.recoveryRate||0)*100).toFixed(1)}%</span><span>Overlap: ${r.candidate?.backupPortfolio?.overlap||0}</span></div>
+        <p>Recovery 5 memakai overlap adaptif dan memprioritaskan digit yang hilang pada replay walk-forward saat Lapisan A gagal; ia tetap tidak mengubah 6D, AK, atau LE.</p><div class="recovery-stats"><span>Replay gagal: ${r.candidate?.backupPortfolio?.recoveryCases||0}</span><span>Recovery ≥3: ${((r.candidate?.backupPortfolio?.recoveryRate||0)*100).toFixed(1)}%</span><span>Miss recall: ${((r.candidate?.backupPortfolio?.missRecall||0)*100).toFixed(1)}%</span><span>Overlap: ${r.candidate?.backupPortfolio?.overlap||0}</span></div>
       </div>
-      <p class="tagline">Engine V12.4 memulai dari full-history scan. Lapisan A tetap konsensus utama; Lapisan B adalah portofolio recovery yang dilatih khusus pada replay kegagalan Lapisan A dan boleh memakai overlap terkontrol untuk mengurangi split 2–2.</p>
+      <p class="tagline">Engine V12.5 memulai dari full-history scan. Lapisan A tetap konsensus utama; Lapisan B belajar dari miss walk-forward, lalu membuka lebih banyak outsider saat kegagalan historis Lapisan A lebih berat.</p>
     </div>
     <div class="section"><h3>Ringkasan</h3>${statsHtml}</div>
     ${akleHtml}

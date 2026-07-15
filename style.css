@@ -106,7 +106,7 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 .audit-columns>div:nth-child(even){border-left:4px solid rgba(16,185,129,.45)}
 .version-pill{box-shadow:0 8px 24px rgba(234,88,12,.12)}
 
-/* V12.4 Conditional Recovery Portfolio */
+/* V12.5 Miss-Directed Recovery Portfolio */
 .five-strong-box{margin-top:14px;padding:13px;border:1px solid #bfdbfe;border-radius:22px;background:rgba(255,255,255,.78)}
 .five-strong-box>small{display:block;margin-bottom:9px;color:#1d4ed8;font-weight:950;letter-spacing:.06em;text-transform:uppercase}
 .digits.compact .digit{width:52px;height:64px;font-size:29px;border-radius:17px}
