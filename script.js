@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.0 • Formula-First Reset + Strict Replay Gate';
+const APP_VERSION = 'IPHOEL Formula Engine V13.1 • Local Formula Ecology + Divergence Reserve';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
@@ -21,7 +21,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Formula-First';
+  $('modelPill').textContent='Local Ecology';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -37,11 +37,11 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay pustaka formula generik','Gate formula dan konsensus posisi','Menyusun AK/LE dan repeat'];
+  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Walk-forward Local Formula Ecology','Menyusun AK/LE, repeat, dan divergence'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
-  const result=buildPrediction(rows); renderResult(result); scanner(false,rows,1,'Scan selesai • tidak ada rescue pasca-ranking');
+  const result=buildPrediction(rows); renderResult(result); scanner(false,rows,1,'Scan selesai • profil lokal dikalibrasi tanpa rescue paksa');
 }
 function scanner(active,rows,progress,label){
   const frame=$('scannerFrame'); if(frame){frame.classList.toggle('is-scanning',active);frame.classList.toggle('is-complete',!active&&progress>=1);}
@@ -73,7 +73,7 @@ function dateValue(date){
 function parseRows(raw){
   const out=[];
   cleanText(raw).split(/\n+/).map(normalizeLine).filter(Boolean).forEach((line,index)=>{
-    const code=line.match(/\b([A-Z]{2,7}\d*)\s*\[\s*(\d{1,8})\s*\]/i);
+    const code=line.match(/\b([A-Z][A-Z0-9]{1,7})\s*\[\s*(\d{1,8})\s*\]/i);
     const digits=parseDigits(code?line.slice(line.lastIndexOf(']')+1):line); if(digits.length<4)return;
     out.push({code:code?code[1].toUpperCase():'',period:code?Number(code[2]):0,date:extractDate(line),day:normalizeDay(line),digits:digits.slice(0,4),index,raw:line});
   });
@@ -117,31 +117,38 @@ function formulaLibrary(){
   return list;
 }
 
+const LOCAL_PROFILES = [
+  {id:'formula-first',label:'Formula-First Baseline',window:99,activeN:7,activeHits:3,activePost:.25,activeStability:.45,tieN:5,tieHits:2,tiePost:.20,tieMult:.36,recurrence:.34,familyTop:5},
+  {id:'strict-full',label:'Full-Depth Ketat',window:99,activeN:7,activeHits:3,activePost:.25,activeStability:.50,tieN:5,tieHits:2,tiePost:.20,tieMult:.20,recurrence:.24,familyTop:4},
+  {id:'recent-local',label:'Recent Local 4',window:4,activeN:4,activeHits:2,activePost:.24,activeStability:.20,tieN:3,tieHits:2,tiePost:.20,tieMult:.22,recurrence:.18,familyTop:3},
+  {id:'recurrence-full',label:'Full-Depth Recurrence',window:99,activeN:6,activeHits:3,activePost:.25,activeStability:.35,tieN:5,tieHits:2,tiePost:.20,tieMult:.30,recurrence:.48,familyTop:4}
+];
+
 function betaMean(h,n,priorHit=1,priorMiss=4){ return (h+priorHit)/(n+priorHit+priorMiss); }
-function formulaStats(transitions,formula,p){
+function formulaStatsProfile(transitions,formula,p,profile){
   let hits=0,recentHits=0; const n=transitions.length,cut=Math.floor(n/2),bands=[{h:0,n:0},{h:0,n:0},{h:0,n:0}];
   transitions.forEach((tr,i)=>{const ok=formula.fn(tr.source.digits)===tr.target.digits[p];if(ok)hits++;if(i>=cut&&ok)recentHits++;const b=Math.min(2,Math.floor(3*i/Math.max(1,n)));bands[b].n++;if(ok)bands[b].h++;});
   const posterior=betaMean(hits,n),recent=betaMean(recentHits,n-cut||1),bandRates=bands.filter(x=>x.n).map(x=>betaMean(x.h,x.n));
   const stability=bandRates.length?Math.max(0,1-(Math.max(...bandRates)-Math.min(...bandRates))):0;
   let status='BLOCKED';
-  if(n>=7&&hits>=3&&posterior>=.25&&stability>=.45)status='ACTIVE';
-  else if(n>=5&&hits>=2&&posterior>=.20)status='TIE';
+  if(n>=profile.activeN&&hits>=profile.activeHits&&posterior>=profile.activePost&&stability>=profile.activeStability)status='ACTIVE';
+  else if(n>=profile.tieN&&hits>=profile.tieHits&&posterior>=profile.tiePost)status='TIE';
   const reliability=Math.max(0,posterior-.10)*Math.log1p(n)*(.55+.25*recent+.20*stability);
   return {hits,trials:n,posterior,recent,stability,status,reliability};
 }
-function buildFormulaModel(transitions,latest){
+function buildFormulaModelProfile(transitions,latest,profile){
   const formulas=formulaLibrary(),byPosition=Array.from({length:4},()=>[]),score=Array.from({length:4},()=>Array(10).fill(0)),familyContrib=Array.from({length:4},()=>Array.from({length:10},()=>({})));
   for(let p=0;p<4;p++){
-    formulas.forEach(f=>{const st=formulaStats(transitions,f,p),digit=f.fn(latest.digits);const row={...f,...st,digit};byPosition[p].push(row);if(st.status==='BLOCKED')return;const mult=st.status==='ACTIVE'?1:.36;const old=familyContrib[p][digit][f.family]||0;familyContrib[p][digit][f.family]=Math.max(old,st.reliability*mult);});
-    for(let d=0;d<10;d++)score[p][d]=Object.values(familyContrib[p][d]).sort((a,b)=>b-a).slice(0,5).reduce((z,x,i)=>z+x*[1,.62,.38,.22,.12][i],0);
+    formulas.forEach(f=>{const st=formulaStatsProfile(transitions,f,p,profile),digit=f.fn(latest.digits);const row={...f,...st,digit};byPosition[p].push(row);if(st.status==='BLOCKED')return;const mult=st.status==='ACTIVE'?1:profile.tieMult;const old=familyContrib[p][digit][f.family]||0;familyContrib[p][digit][f.family]=Math.max(old,st.reliability*mult);});
+    for(let d=0;d<10;d++)score[p][d]=Object.values(familyContrib[p][d]).sort((a,b)=>b-a).slice(0,profile.familyTop).reduce((z,x,i)=>z+x*[1,.62,.38,.22,.12][i],0);
     byPosition[p].sort((a,b)=>(b.status==='ACTIVE')-(a.status==='ACTIVE')||b.reliability-a.reliability||b.hits-a.hits||a.id.localeCompare(b.id));
   }
   return {formulas,byPosition,score,familyContrib};
 }
-function addPositionRecurrence(model,transitions){
+function addPositionRecurrenceProfile(model,transitions,profile){
   for(let p=0;p<4;p++){
     const counts=Array(10).fill(0);transitions.forEach((tr,i)=>counts[tr.target.digits[p]]+=.75+.5*(i+1)/transitions.length);
-    const max=Math.max(1,...counts);for(let d=0;d<10;d++){const q=counts[d]/max;if(q>0)model.score[p][d]+=.34*q;}
+    const max=Math.max(1,...counts);for(let d=0;d<10;d++){const q=counts[d]/max;if(q>0)model.score[p][d]+=profile.recurrence*q;}
   }
 }
 function carryProfile(transitions,latest){
@@ -150,34 +157,78 @@ function carryProfile(transitions,latest){
   const digit=Array(10).fill(0);latest.digits.forEach((d,p)=>digit[d]=Math.max(digit[d],role[p]/n));return {dist,role:role.map(x=>x/n),digit,cap,expected:dist.reduce((z,v,k)=>z+v*k,0)/n};
 }
 function targetCoverage(transitions){const c=Array(10).fill(0);transitions.forEach((tr,i)=>unique(tr.target.digits).forEach(d=>c[d]+=.72+.48*(i+1)/transitions.length));return normalize(c);}
-function positionRank(model){return model.score.map(arr=>DIGITS.map(d=>({digit:d,score:arr[d],families:Object.keys(model.familyContrib[model.score.indexOf(arr)][d]).length})).sort((a,b)=>b.score-a.score||b.families-a.families||a.digit-b.digit));}
+function positionRank(model){return model.score.map((arr,p)=>DIGITS.map(d=>({digit:d,score:arr[d],families:Object.keys(model.familyContrib[p][d]).length})).sort((a,b)=>b.score-a.score||b.families-a.families||a.digit-b.digit));}
+function positionEcology(posRank,model){
+  return posRank.map((r,p)=>{const top=r[0],second=r[1],top3=sum(r.slice(0,3).map(x=>x.score));const active=model.byPosition[p].filter(x=>x.status==='ACTIVE').length;const tie=model.byPosition[p].filter(x=>x.status==='TIE').length;return {top:top.digit,margin:top.score/Math.max(.0001,second.score),concentration:top3?top.score/top3:0,active,tie,coherence:clamp(.45*Math.min(1,active/4)+.30*Math.min(1,(top.score/Math.max(.0001,second.score)-1)/.6)+.25*(top3?top.score/top3:0))};});
+}
 
-function buildPrediction(inputRows){
-  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),latest=rows[0],targetDay=inferTargetDay(rows),transitions=transitionsFor(rows,latest.day,targetDay);
-  const fallback=transitions.length<5; const training=fallback?rows.slice().reverse().slice(0,-1).map((r,i,a)=>i<a.length-1?{source:r,target:a[i+1]}:null).filter(Boolean):transitions;
-  const model=buildFormulaModel(training,latest); addPositionRecurrence(model,training);
-  const posRank=positionRank(model),coverage=targetCoverage(training),carry=carryProfile(training,latest),posNorm=model.score.map(normalize);
+function buildCorePrediction(inputRows,profile){
+  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),latest=rows[0],targetDay=inferTargetDay(rows),sameDay=transitionsFor(rows,latest.day,targetDay);
+  const fallback=sameDay.length<5; let training=fallback?rows.slice().reverse().slice(0,-1).map((r,i,a)=>i<a.length-1?{source:r,target:a[i+1]}:null).filter(Boolean):sameDay;
+  if(!fallback&&profile.window<99)training=training.slice(-profile.window);
+  const model=buildFormulaModelProfile(training,latest,profile); addPositionRecurrenceProfile(model,training,profile);
+  const posRank=positionRank(model),ecology=positionEcology(posRank,model),coverage=targetCoverage(training),carry=carryProfile(training,latest),posNorm=model.score.map(normalize),baselineMode=profile.id==='formula-first';
+  const rawWeights=baselineMode?[1,1,1,1]:ecology.map(x=>.55+.75*x.coherence),weightSum=sum(rawWeights)||1,posWeights=rawWeights.map(x=>x/weightSum);
   const overall=Array(10).fill(0),breadth=Array(10).fill(0);
   for(let d=0;d<10;d++){
-    const posEvidence=posNorm.reduce((z,a)=>z+a[d],0)/4;
+    const posEvidence=posNorm.reduce((z,a,p)=>z+a[d]*posWeights[p],0);
     breadth[d]=model.familyContrib.reduce((z,p)=>z+Object.keys(p[d]).length,0);
-    overall[d]=.72*posEvidence+.16*coverage[d]+.08*Math.min(1,breadth[d]/6)+.04*carry.digit[d];
+    overall[d]=baselineMode?(.72*posEvidence+.16*coverage[d]+.08*Math.min(1,breadth[d]/6)+.04*carry.digit[d]):(.76*posEvidence+.14*coverage[d]+.06*Math.min(1,breadth[d]/6)+.04*carry.digit[d]);
   }
-  const overallRank=DIGITS.slice().sort((a,b)=>overall[b]-overall[a]||breadth[b]-breadth[a]||a-b);
-  const selected=[]; const protectedSet=new Set();
-  posRank.forEach((r,p)=>{const top=r[0],second=r[1],margin=top.score/Math.max(.0001,second.score),activeFamilies=Object.keys(model.familyContrib[p][top.digit]).length;if(top.score>0&&(activeFamilies>=2||margin>=1.22)){if(!selected.includes(top.digit))selected.push(top.digit);protectedSet.add(top.digit);}});
+  const overallRank=DIGITS.slice().sort((a,b)=>overall[b]-overall[a]||breadth[b]-breadth[a]||a-b),selected=[],protectedSet=new Set();
+  posRank.forEach((r,p)=>{const top=r[0],second=r[1],margin=top.score/Math.max(.0001,second.score),activeFamilies=Object.keys(model.familyContrib[p][top.digit]).length;const protect=baselineMode?(top.score>0&&(activeFamilies>=2||margin>=1.22)):(top.score>0&&(ecology[p].active>=1||ecology[p].margin>=1.26||ecology[p].coherence>=.58));if(protect){if(!selected.includes(top.digit))selected.push(top.digit);protectedSet.add(top.digit);}});
   overallRank.forEach(d=>{if(selected.length<6&&!selected.includes(d))selected.push(d);});
   const latestSet=new Set(unique(latest.digits));
   while(selected.filter(d=>latestSet.has(d)).length>carry.cap){const victim=selected.filter(d=>latestSet.has(d)&&!protectedSet.has(d)).sort((a,b)=>overall[a]-overall[b])[0];if(victim==null)break;const incoming=overallRank.find(d=>!selected.includes(d)&&!latestSet.has(d));if(incoming==null)break;selected[selected.indexOf(victim)]=incoming;}
-  const finalDigits=selected.slice(0,6);
-  const strongFive=finalDigits.slice().sort((a,b)=>overall[b]-overall[a]||a-b).slice(0,5);
-  const ak=buildPairs(posRank[0],posRank[1]),le=buildPairs(posRank[2],posRank[3]);
-  const twin=chooseTwin(training,posRank,model,latest);
-  const secondary=buildOrthogonalSecondary(model,overall,strongFive,finalDigits);
-  const signal=signalGrade(model,training,posRank);
-  const activeFormulas=model.byPosition.flat().filter(x=>x.status==='ACTIVE');
-  const tieFormulas=model.byPosition.flat().filter(x=>x.status==='TIE');
-  return {rows,market,latest,targetDay,transitions:training,sameDaySamples:transitions.length,fallback,model,posRank,coverage,carry,overall,overallRank,finalDigits,strongFive,ak,le,twin,secondary,signal,activeFormulas,tieFormulas};
+  const finalDigits=selected.slice(0,6),strongFive=finalDigits.slice().sort((a,b)=>overall[b]-overall[a]||a-b).slice(0,5),ak=buildPairs(posRank[0],posRank[1]),le=buildPairs(posRank[2],posRank[3]);
+  const twin=chooseTwin(training,posRank,model,latest),secondary=buildOrthogonalSecondary(model,overall,strongFive,finalDigits),signal=signalGrade(model,training,posRank,ecology);
+  return {rows,market,latest,targetDay,transitions:training,sameDaySamples:sameDay.length,fallback,model,posRank,ecology,coverage,carry,overall,overallRank,finalDigits,strongFive,ak,le,twin,secondary,signal,profile,activeFormulas:model.byPosition.flat().filter(x=>x.status==='ACTIVE'),tieFormulas:model.byPosition.flat().filter(x=>x.status==='TIE')};
+}
+function profileBacktest(rows,profile,sourceDay,targetDay){
+  const chrono=rows.slice().reverse(),tests=[];
+  for(let i=10;i<chrono.length-1;i++){
+    if(chrono[i].day!==sourceDay||chrono[i+1].day!==targetDay)continue;
+    const hist=chrono.slice(0,i+1).reverse();if(transitionsFor(hist,sourceDay,targetDay).length<3)continue;
+    const pred=buildCorePrediction(hist,profile);if(pred.targetDay!==targetDay)continue;
+    const actual=chrono[i+1].digits,actualSet=new Set(actual),u=actualSet.size,hit6=pred.finalDigits.filter(d=>actualSet.has(d)).length,hit5=pred.strongFive.filter(d=>actualSet.has(d)).length,pos=pred.posRank.reduce((z,r,p)=>z+(r[0].digit===actual[p]?1:0),0);
+    tests.push({hit6,hit5,pos,u});
+  }
+  const prior=.66,priorWeight=2;if(!tests.length)return {profile,score:prior,tests:0,recall6:0,recall5:0,position:0};
+  let weighted=0,wsum=0,r6=0,r5=0,pp=0;
+  tests.forEach((t,i)=>{const w=.75+.5*(i+1)/tests.length;const metric=.72*(t.hit6/t.u)+.20*(t.hit5/t.u)+.08*(t.pos/4);weighted+=w*metric;wsum+=w;r6+=t.hit6/t.u;r5+=t.hit5/t.u;pp+=t.pos/4;});
+  return {profile,score:(weighted+prior*priorWeight)/(wsum+priorWeight),tests:tests.length,recall6:r6/tests.length,recall5:r5/tests.length,position:pp/tests.length};
+}
+function selectLocalProfile(rows,targetDay){
+  const sourceDay=rows[0].day,results=LOCAL_PROFILES.map(p=>profileBacktest(rows,p,sourceDay,targetDay)).sort((a,b)=>b.score-a.score||b.tests-a.tests||a.profile.id.localeCompare(b.profile.id));
+  const baseline=results.find(x=>x.profile.id==='formula-first')||results[0],best=results[0];
+  const decisive=best.profile.id!==baseline.profile.id&&best.tests>=4&&best.score>=baseline.score+.080;
+  return {selected:decisive?best.profile:baseline.profile,results,best,baseline,decisive};
+}
+function weakPositionReserve(core,excluded){
+  const candidates=excluded.map(d=>{let appearances=0,score=0;
+    core.posRank.forEach((r,p)=>{const idx=r.findIndex(x=>x.digit===d);if(idx>=0&&idx<6){appearances++;const top=Math.max(.0001,r[0].score);score+=(6-idx)/6*(r[idx].score/top);}});
+    return {digit:d,appearances,score:appearances*.65+score};
+  });
+  return candidates.sort((a,b)=>b.appearances-a.appearances||b.score-a.score||a.digit-b.digit)[0]||null;
+}
+function buildDivergenceReserve(core,profileRuns,profileSelection){
+  const excluded=DIGITS.filter(d=>!core.finalDigits.includes(d)),votes=Array(10).fill(0);
+  profileRuns.forEach(run=>{const bt=profileSelection.results.find(x=>x.profile.id===run.profile.id);const w=bt?.score||.5;run.finalDigits.forEach(d=>{if(excluded.includes(d))votes[d]+=w;});run.strongFive.forEach(d=>{if(excluded.includes(d))votes[d]+=.35*w;});});
+  const orthogonalList=core.secondary.digits.filter(d=>excluded.includes(d));
+  const orthogonal=orthogonalList[0];
+  const weak=weakPositionReserve(core,excluded.filter(d=>d!==orthogonal));
+  const voted=excluded.slice().sort((a,b)=>votes[b]-votes[a]||a-b)[0];
+  const digits=[];
+  const reserveOrder=core.signal.label==='RENDAH'?[orthogonalList[0],orthogonalList[1],weak?.digit,voted]:[orthogonal,weak?.digit,orthogonalList[1],voted];
+  reserveOrder.forEach(d=>{if(Number.isInteger(d)&&!digits.includes(d)&&digits.length<2)digits.push(d);});
+  excluded.sort((a,b)=>votes[b]-votes[a]||a-b).forEach(d=>{if(digits.length<2&&!digits.includes(d))digits.push(d);});
+  const sets=profileRuns.map(r=>new Set(r.finalDigits));let jac=[];for(let i=0;i<sets.length;i++)for(let j=i+1;j<sets.length;j++){const inter=[...sets[i]].filter(x=>sets[j].has(x)).length,uni=new Set([...sets[i],...sets[j]]).size;jac.push(inter/uni);}
+  return {digits,orthogonal,weak:weak?.digit??null,voted,agreement:jac.length?mean(jac):1,active:core.signal.label==='RENDAH'||(jac.length?mean(jac)<.72:false)};
+}
+function buildPrediction(inputRows){
+  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),targetDay=inferTargetDay(rows),selection=selectLocalProfile(rows,targetDay),profileRuns=LOCAL_PROFILES.map(p=>buildCorePrediction(rows,p));
+  const core=profileRuns.find(r=>r.profile.id===selection.selected.id)||profileRuns[0],reserve=buildDivergenceReserve(core,profileRuns,selection);
+  return {...core,profileSelection:selection,profileRuns,divergenceReserve:reserve};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
@@ -203,18 +254,19 @@ function buildOrthogonalSecondary(model,overall,strongFive,finalDigits){
   rank.forEach(d=>{if(selected.length>=5)return;const overlaps=selected.filter(x=>primary.has(x)).length;if(primary.has(d)&&overlaps>=2)return;selected.push(d);});
   return {digits:selected,rank:rank.map(d=>({digit:d,score:scores[d],reasons:reasons[d]}))};
 }
-function signalGrade(model,transitions,posRank){
-  const active=model.byPosition.map(a=>a.filter(x=>x.status==='ACTIVE').length),topMargins=posRank.map(r=>r[0].score/Math.max(.0001,r[1].score));
-  const value=.45*Math.min(1,sum(active)/20)+.35*Math.min(1,mean(topMargins)/1.6)+.20*Math.min(1,transitions.length/10);
-  return {value,label:value>=.68?'MENENGAH':value>=.48?'RENDAH–MENENGAH':'RENDAH',active,topMargins};
+function signalGrade(model,transitions,posRank,ecology){
+  const active=model.byPosition.map(a=>a.filter(x=>x.status==='ACTIVE').length),topMargins=posRank.map(r=>r[0].score/Math.max(.0001,r[1].score)),eco=mean((ecology||[]).map(x=>x.coherence));
+  const value=.34*Math.min(1,sum(active)/20)+.26*Math.min(1,mean(topMargins)/1.6)+.22*Math.min(1,transitions.length/10)+.18*eco;
+  return {value,label:value>=.70?'MENENGAH':value>=.52?'RENDAH–MENENGAH':'RENDAH',active,topMargins,ecology:eco};
 }
 
-function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map((d,i)=>`<div class="digit ${cls}"><b>${d}</b><small>${i+1}</small></div>`).join('')}</div>`;}
-function pairCards(items,cls){return `<div class="pair-grid">${items.map((x,i)=>`<div class="pair-card ${cls}"><b>${x.pair}</b><small>${i+1}</small></div>`).join('')}</div>`;}
+function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
+function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
 function renderResult(r){
   const topFormula=p=>r.model.byPosition[p].filter(x=>x.status!=='BLOCKED').slice(0,5).map(x=>`${x.label}→${x.digit} (${x.hits}/${x.trials}, ${x.status})`).join('<br>')||'Tidak ada formula lolos';
-  const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar kuat';
-  const low=r.signal.label==='RENDAH';
+  const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar kuat',low=r.signal.label==='RENDAH';
+  const ps=r.profileSelection,scoreRows=ps.results.map(x=>`<span class="profile-chip ${x.profile.id===r.profile.id?'chosen':''}">${x.profile.label}: ${(100*x.score).toFixed(1)}% • ${x.tests} tes</span>`).join('');
+  const reserveText=r.divergenceReserve.digits.join(' '),reserveState=r.divergenceReserve.active?'AKTIF':'AUDIT';
   $('output').className='result';
   $('output').innerHTML=`
     <div class="result-hero">
@@ -222,9 +274,11 @@ function renderResult(r){
       <h3>6 Digit Formula</h3>${digitCards(r.finalDigits)}
       <div class="five-strong-box"><small>5 Digit Terkuat</small>${digitCards(r.strongFive,'strong-five')}</div>
       <div class="twin-box"><small>Kandidat kembar</small><b>${twinText}</b></div>
-      <p class="tagline">${low?'Sinyal formula rendah: hasil sebaiknya dibaca sebagai audit, bukan konsensus kuat.':'Hasil dibentuk hanya dari formula yang lolos replay dan recurrence posisi.'}</p>
+      <p class="tagline">${low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dipisahkan dan tidak memaksa swap.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.'}</p>
     </div>
-    <div class="backup-card"><div class="backup-head"><div><small>Formula Cadangan Ortogonal</small><b>5 Digit Sekunder</b></div><span class="backup-risk">Bukan recovery paksa</span></div>${digitCards(r.secondary.digits,'backup-digit')}<p>Dipilih dari keluarga formula runner-up yang berbeda dari konsensus utama. Lapisan ini tidak dilatih memakai aktual dan tidak menjanjikan minimal tiga digit.</p></div>
+    <div class="ecology-card"><div class="backup-head"><div><small>Local Formula Ecology</small><b>${r.profile.label}</b></div><span class="backup-risk">${ps.decisive?'Unggul decisif':'Baseline dipertahankan'}</span></div><div class="profile-chips">${scoreRows}</div><p>Profil hanya berubah bila mengalahkan baseline dengan margin walk-forward minimum. Nama market tidak menjadi kondisi formula.</p></div>
+    <div class="reserve-card"><div><small>2 Digit Divergence Reserve • ${reserveState}</small><b>${reserveText||'—'}</b></div><p>Satu digit berasal dari keluarga ortogonal dan satu dari konsensus posisi lemah lintas profil. Reserve tidak mengubah 6D, AK, LE, carry cap, atau kembar.</p><div class="recovery-stats"><span>Kesepakatan profil ${(100*r.divergenceReserve.agreement).toFixed(0)}%</span><span>Ortogonal ${r.divergenceReserve.orthogonal??'-'}</span><span>Weak-position ${r.divergenceReserve.weak??'-'}</span></div></div>
+    <div class="backup-card"><div class="backup-head"><div><small>Formula Cadangan Ortogonal</small><b>5 Digit Sekunder</b></div><span class="backup-risk">Bukan recovery paksa</span></div>${digitCards(r.secondary.digits,'backup-digit')}<p>Runner-up keluarga formula; tidak dilatih memakai aktual dan tidak menjanjikan minimal tiga digit.</p></div>
     <div class="stats">
       <div class="stat"><small>Market</small><b>${r.market||'-'}</b></div><div class="stat"><small>Data</small><b>${r.rows.length}</b></div>
       <div class="stat"><small>Latest</small><b>${r.latest.digits.join('')}</b></div><div class="stat"><small>Target</small><b>${r.targetDay}</b></div>
@@ -232,12 +286,12 @@ function renderResult(r){
     </div>
     <div class="akle-section"><h4>AKLE Position-First</h4><div class="akle-grid"><div><small>5 Pilihan AK</small>${pairCards(r.ak,'ak')}</div><div><small>5 Pilihan LE</small>${pairCards(r.le,'le')}</div></div></div>
     <div class="audit-columns">
-      <div><b>Gate formula</b><p class="tagline">ACTIVE ${r.activeFormulas.length} • TIE ${r.tieFormulas.length} • ${r.fallback?'fallback global karena replay hari kurang':'same-day replay aktif'}</p></div>
+      <div><b>Gate formula</b><p class="tagline">ACTIVE ${r.activeFormulas.length} • TIE ${r.tieFormulas.length} • ${r.fallback?'fallback global':'same-day replay'} • ecology ${(100*r.signal.ecology).toFixed(0)}%</p></div>
       <div><b>Posisi A</b><p class="tagline">${topFormula(0)}</p></div><div><b>Posisi K</b><p class="tagline">${topFormula(1)}</p></div>
       <div><b>Posisi L</b><p class="tagline">${topFormula(2)}</p></div><div><b>Posisi E</b><p class="tagline">${topFormula(3)}</p></div>
       <div><b>Carry audit</b><p class="tagline">Expected ${r.carry.expected.toFixed(2)} • cap maksimum ${r.carry.cap} • role ${r.carry.role.map((x,i)=>`${POS[i]} ${(100*x).toFixed(0)}%`).join(' | ')}</p></div>
-      <div><b>Anti-overfit</b><p class="tagline">Tidak ada bridge market, rescue aktual, omission cascade, atau conditional miss recovery. Pembaruan formula harus diuji pada batch buta sebelum diaktifkan.</p></div>
+      <div><b>Anti-overfit</b><p class="tagline">Tidak ada kondisi nama market, digit aktual, rescue pasca-ranking, atau conditional miss recovery. Adaptasi hanya melalui walk-forward lokal.</p></div>
     </div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,inferTargetDay,transitionsFor,formulaLibrary};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,selectLocalProfile,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
