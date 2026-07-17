@@ -142,3 +142,5 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 .reserve-card p,.ecology-card p{font-size:11px;line-height:1.5;color:#475569;margin:10px 0 0}
 .profile-chips{display:flex;flex-wrap:wrap;gap:7px}.profile-chip{border:1px solid #ddd6fe;border-radius:999px;background:#fff;padding:6px 9px;font-size:10px;font-weight:900;color:#6d28d9}.profile-chip.chosen{background:#7c3aed;color:#fff;border-color:#7c3aed}
 @media(max-width:620px){.reserve-card>div:first-child{align-items:flex-start;flex-direction:column}.reserve-card b{font-size:30px}}
+
+.twin-reserve-box{border-style:dashed;opacity:.96}.twin-reserve-box span{display:block;margin-top:6px;font-size:.78rem;opacity:.76;font-weight:600}

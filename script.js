@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.2 • Ecology Integrity Gate + Balanced Formula Coverage';
+const APP_VERSION = 'IPHOEL Formula Engine V13.3 • Twin Integrity + Structural Twin Reserve';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
@@ -263,12 +263,13 @@ function buildPrediction(inputRows){
   const agreedTwin=Object.entries(twinVotes).sort((a,b)=>b[1]-a[1])[0];
   const twin=balancedActive&&(!agreedTwin||agreedTwin[1]<3)?null:selectedCore.twin;
   const core=balancedActive?{...selectedCore,finalDigits:balanced.digits,strongFive:balanced.strong,twin}:selectedCore;
+  const twinReserve=chooseStructuralTwinReserve(core.transitions,core.model,core.strongFive,core.overall,core.twin);
   const reserve=buildDivergenceReserve(core,profileRuns,selection);
   const ecologyMode=balancedActive?'BALANCED':'PROFILE';
   const signalPenalty=balancedActive?.18:0;
   const signal={...core.signal,value:Math.max(0,core.signal.value-signalPenalty)};
   signal.label=signal.value>=.70?'MENENGAH':signal.value>=.52?'RENDAH–MENENGAH':'RENDAH';
-  return {...core,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
+  return {...core,twinReserve,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
@@ -282,6 +283,31 @@ function chooseTwin(transitions,posRank,model,latest){
     DIGITS.forEach(d=>{if(!topP.has(d)||!topQ.has(d))return;const digitHits=same.filter(tr=>tr.target.digits[p]===d).length;const families=Object.keys(model.familyContrib[p][d]).length+Object.keys(model.familyContrib[q][d]).length;if(digitHits<1||families<3)return;const score=rate+.15*digitHits+.04*families;candidates.push({digit:d,shape:label,score,rate,occurrences:same.length,digitHits});});
   });
   candidates.sort((a,b)=>b.score-a.score||b.digitHits-a.digitHits||a.digit-b.digit);return candidates[0]||null;
+}
+
+function chooseStructuralTwinReserve(transitions,model,strongFive,overall,strictTwin){
+  const n=transitions.length;
+  const repeatEvents=transitions.filter(tr=>new Set(tr.target.digits).size<4);
+  const repeatRate=repeatEvents.length/Math.max(1,n);
+  if(n<6||repeatEvents.length<4||repeatRate<.40)return null;
+  const ranked=strongFive.map((digit,rank)=>{
+    let active=0,activePositions=0;const activeFamilies=new Set();
+    for(let p=0;p<4;p++){
+      let positionActive=0;
+      model.byPosition[p].forEach(f=>{
+        if(f.digit!==digit||f.status!=='ACTIVE')return;
+        active++;positionActive++;activeFamilies.add(`${p}|${f.family}`);
+      });
+      if(positionActive)activePositions++;
+    }
+    const score=active+0.80*activePositions+0.35*activeFamilies.size+1.25*(overall[digit]||0)+0.08*(5-rank);
+    return {digit,score,active,activePositions,families:activeFamilies.size};
+  }).sort((a,b)=>b.score-a.score||b.active-a.active||b.activePositions-a.activePositions||a.digit-b.digit);
+  const leader=ranked[0],runner=ranked[1];
+  if(!leader||leader.active<5||leader.activePositions<3||leader.families<4)return null;
+  if(runner&&leader.active-runner.active<2)return null;
+  if(strictTwin&&strictTwin.digit===leader.digit)return null;
+  return {...leader,repeatRate,repeatEvents:repeatEvents.length,label:'Structural breadth reserve'};
 }
 function buildOrthogonalSecondary(model,overall,strongFive,finalDigits){
   const primary=new Set(strongFive),scores=Array(10).fill(0),reasons=Array.from({length:10},()=>[]);
@@ -304,7 +330,9 @@ function digitCards(digits,cls=''){return `<div class="digits compact">${digits.
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
 function renderResult(r){
   const topFormula=p=>r.model.byPosition[p].filter(x=>x.status!=='BLOCKED').slice(0,5).map(x=>`${x.label}→${x.digit} (${x.hits}/${x.trials}, ${x.status})`).join('<br>')||'Tidak ada formula lolos';
-  const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar kuat',low=r.signal.label==='RENDAH';
+  const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar utama yang lolos gate';
+  const twinReserveText=r.twinReserve?`${r.twinReserve.digit}${r.twinReserve.digit}`:'Tidak ada kembar struktural';
+  const low=r.signal.label==='RENDAH';
   const ps=r.profileSelection,scoreRows=ps.results.map(x=>`<span class="profile-chip ${x.profile.id===r.profile.id?'chosen':''}">${x.profile.label}: ${(100*x.score).toFixed(1)}% • posisi ${(100*x.position).toFixed(1)}% • ${x.tests} tes</span>`).join('');
   const reserveText=r.divergenceReserve.digits.join(' '),reserveState=r.divergenceReserve.active?'AKTIF':'AUDIT';
   $('output').className='result';
@@ -313,8 +341,9 @@ function renderResult(r){
       <span class="mini-title">${r.balancedActive?'Balanced Formula-Coverage':'Formula Murni'} • ${r.signal.label}</span>
       <h3>6 Digit Formula</h3>${digitCards(r.finalDigits)}
       <div class="five-strong-box"><small>5 Digit Terkuat</small>${digitCards(r.strongFive,'strong-five')}</div>
-      <div class="twin-box"><small>Kandidat kembar</small><b>${twinText}</b></div>
-      <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dipisahkan dan tidak memaksa swap.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
+      <div class="twin-box"><small>Kembar utama • strict replay</small><b>${twinText}</b></div>
+      <div class="twin-box twin-reserve-box"><small>Kembar struktural • cadangan</small><b>${twinReserveText}</b>${r.twinReserve?`<span>Repeat target ${(100*r.twinReserve.repeatRate).toFixed(0)}% • ACTIVE ${r.twinReserve.active} di ${r.twinReserve.activePositions} posisi</span>`:''}</div>
+      <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking. Kembar struktural tetap terpisah dari kembar utama.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dipisahkan dan tidak memaksa swap.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
     </div>
     <div class="ecology-card"><div class="backup-head"><div><small>Local Formula Ecology</small><b>${r.balancedActive?'Balanced Formula-Coverage':r.profile.label}</b></div><span class="backup-risk">${r.balancedActive?'Konflik horizon':(ps.decisive?'Lolos integrity gate':'Baseline dipertahankan')}</span></div><div class="profile-chips">${scoreRows}</div><p>${r.balancedActive?`Formula core ${r.balancedPortfolio.formulaCore.join(' ')} • coverage anchor ${r.balancedPortfolio.coverageAnchors.join(' ')} • kesepakatan profil ${(100*r.profileAgreement).toFixed(0)}%.`:`Profil berubah hanya bila unggul, akurasi posisi tidak runtuh, dan short-window mempunyai sampel cukup. Margin best ${(100*ps.margin).toFixed(1)} poin.`}</p></div>
     <div class="reserve-card"><div><small>2 Digit Divergence Reserve • ${reserveState}</small><b>${reserveText||'—'}</b></div><p>Satu digit berasal dari keluarga ortogonal dan satu dari konsensus posisi lemah lintas profil. Reserve tidak mengubah 6D, AK, LE, carry cap, atau kembar.</p><div class="recovery-stats"><span>Kesepakatan profil ${(100*r.divergenceReserve.agreement).toFixed(0)}%</span><span>Ortogonal ${r.divergenceReserve.orthogonal??'-'}</span><span>Weak-position ${r.divergenceReserve.weak??'-'}</span></div></div>
