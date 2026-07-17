@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.1 • Local Formula Ecology + Divergence Reserve';
+const APP_VERSION = 'IPHOEL Formula Engine V13.2 • Ecology Integrity Gate + Balanced Formula Coverage';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
@@ -21,7 +21,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Local Ecology';
+  $('modelPill').textContent='Ecology Integrity';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -37,11 +37,11 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Walk-forward Local Formula Ecology','Menyusun AK/LE, repeat, dan divergence'];
+  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Menguji integritas profil dan konflik horizon','Menyusun formula-coverage portfolio, AK/LE, dan repeat'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
-  const result=buildPrediction(rows); renderResult(result); scanner(false,rows,1,'Scan selesai • profil lokal dikalibrasi tanpa rescue paksa');
+  const result=buildPrediction(rows); renderResult(result); scanner(false,rows,1,'Scan selesai • profil diuji integritas; konflik diselesaikan tanpa rescue pasca-ranking');
 }
 function scanner(active,rows,progress,label){
   const frame=$('scannerFrame'); if(frame){frame.classList.toggle('is-scanning',active);frame.classList.toggle('is-complete',!active&&progress>=1);}
@@ -201,8 +201,13 @@ function profileBacktest(rows,profile,sourceDay,targetDay){
 function selectLocalProfile(rows,targetDay){
   const sourceDay=rows[0].day,results=LOCAL_PROFILES.map(p=>profileBacktest(rows,p,sourceDay,targetDay)).sort((a,b)=>b.score-a.score||b.tests-a.tests||a.profile.id.localeCompare(b.profile.id));
   const baseline=results.find(x=>x.profile.id==='formula-first')||results[0],best=results[0];
-  const decisive=best.profile.id!==baseline.profile.id&&best.tests>=4&&best.score>=baseline.score+.080;
-  return {selected:decisive?best.profile:baseline.profile,results,best,baseline,decisive};
+  const margin=best.score-baseline.score;
+  const positionFloor=Math.max(.10,baseline.position-.020);
+  const positionIntegrity=best.position>=positionFloor;
+  const shortWindowIntegrity=best.profile.window>=5||(best.tests>=8&&best.position>=.12&&best.recall5>=baseline.recall5+.05);
+  const decisive=best.profile.id!==baseline.profile.id&&best.tests>=5&&margin>=.080&&positionIntegrity&&shortWindowIntegrity;
+  const rejected=best.profile.id!==baseline.profile.id&&!decisive;
+  return {selected:decisive?best.profile:baseline.profile,results,best,baseline,decisive,rejected,margin,positionFloor,positionIntegrity,shortWindowIntegrity};
 }
 function weakPositionReserve(core,excluded){
   const candidates=excluded.map(d=>{let appearances=0,score=0;
@@ -225,10 +230,45 @@ function buildDivergenceReserve(core,profileRuns,profileSelection){
   const sets=profileRuns.map(r=>new Set(r.finalDigits));let jac=[];for(let i=0;i<sets.length;i++)for(let j=i+1;j<sets.length;j++){const inter=[...sets[i]].filter(x=>sets[j].has(x)).length,uni=new Set([...sets[i],...sets[j]]).size;jac.push(inter/uni);}
   return {digits,orthogonal,weak:weak?.digit??null,voted,agreement:jac.length?mean(jac):1,active:core.signal.label==='RENDAH'||(jac.length?mean(jac)<.72:false)};
 }
+function profileAgreement(profileRuns){
+  const sets=profileRuns.map(r=>new Set(r.finalDigits)),jac=[];
+  for(let i=0;i<sets.length;i++)for(let j=i+1;j<sets.length;j++){
+    const inter=[...sets[i]].filter(x=>sets[j].has(x)).length,uni=new Set([...sets[i],...sets[j]]).size;jac.push(inter/Math.max(1,uni));
+  }
+  return jac.length?mean(jac):1;
+}
+function buildBalancedEcologyPortfolio(profileRuns,selection){
+  const weights={};selection.results.forEach(x=>weights[x.profile.id]=x.score);
+  const consensus=Array(10).fill(0),positionVotes=Array(10).fill(0),familyVotes=Array(10).fill(0);
+  profileRuns.forEach(run=>{
+    const w=weights[run.profile.id]||.5,max=Math.max(.0001,...run.overall);
+    for(let d=0;d<10;d++)consensus[d]+=w*(run.overall[d]/max);
+    run.posRank.forEach(r=>r.slice(0,4).forEach((x,i)=>positionVotes[x.digit]+=w*(4-i)/4));
+    run.model.byPosition.forEach(rows=>rows.filter(x=>x.status==='ACTIVE').forEach(x=>familyVotes[x.digit]+=w*x.reliability));
+  });
+  const formulaRank=DIGITS.slice().sort((a,b)=>consensus[b]-consensus[a]||positionVotes[b]-positionVotes[a]||familyVotes[b]-familyVotes[a]||a-b);
+  const baseline=profileRuns.find(x=>x.profile.id==='formula-first')||profileRuns[0],coverage=baseline.coverage;
+  const formulaCore=formulaRank.slice(0,3),coverageAnchors=DIGITS.filter(d=>!formulaCore.includes(d)).sort((a,b)=>coverage[b]-coverage[a]||consensus[b]-consensus[a]||a-b).slice(0,3);
+  const digits=[...formulaCore,...coverageAnchors];
+  const combined=Array(10).fill(0);DIGITS.forEach(d=>combined[d]=.68*consensus[d]/Math.max(.0001,...consensus)+.32*coverage[d]);
+  const strong=digits.slice().sort((a,b)=>combined[b]-combined[a]||a-b).slice(0,5);
+  return {digits,strong,formulaCore,coverageAnchors,formulaRank,consensus,positionVotes,familyVotes,coverage,combined};
+}
 function buildPrediction(inputRows){
   const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),targetDay=inferTargetDay(rows),selection=selectLocalProfile(rows,targetDay),profileRuns=LOCAL_PROFILES.map(p=>buildCorePrediction(rows,p));
-  const core=profileRuns.find(r=>r.profile.id===selection.selected.id)||profileRuns[0],reserve=buildDivergenceReserve(core,profileRuns,selection);
-  return {...core,profileSelection:selection,profileRuns,divergenceReserve:reserve};
+  const selectedCore=profileRuns.find(r=>r.profile.id===selection.selected.id)||profileRuns[0],agreement=profileAgreement(profileRuns),balanced=buildBalancedEcologyPortfolio(profileRuns,selection);
+  const bestPositionWeak=selection.best.position<.12,conflict=agreement<.70;
+  const balancedActive=conflict&&(selection.rejected||bestPositionWeak||selectedCore.profile.window<5||agreement<.70);
+  const twinVotes={};profileRuns.forEach(run=>{if(run.twin){const k=`${run.twin.digit}|${run.twin.shape}`;twinVotes[k]=(twinVotes[k]||0)+1;}});
+  const agreedTwin=Object.entries(twinVotes).sort((a,b)=>b[1]-a[1])[0];
+  const twin=balancedActive&&(!agreedTwin||agreedTwin[1]<3)?null:selectedCore.twin;
+  const core=balancedActive?{...selectedCore,finalDigits:balanced.digits,strongFive:balanced.strong,twin}:selectedCore;
+  const reserve=buildDivergenceReserve(core,profileRuns,selection);
+  const ecologyMode=balancedActive?'BALANCED':'PROFILE';
+  const signalPenalty=balancedActive?.18:0;
+  const signal={...core.signal,value:Math.max(0,core.signal.value-signalPenalty)};
+  signal.label=signal.value>=.70?'MENENGAH':signal.value>=.52?'RENDAH–MENENGAH':'RENDAH';
+  return {...core,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
@@ -265,18 +305,18 @@ function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<di
 function renderResult(r){
   const topFormula=p=>r.model.byPosition[p].filter(x=>x.status!=='BLOCKED').slice(0,5).map(x=>`${x.label}→${x.digit} (${x.hits}/${x.trials}, ${x.status})`).join('<br>')||'Tidak ada formula lolos';
   const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar kuat',low=r.signal.label==='RENDAH';
-  const ps=r.profileSelection,scoreRows=ps.results.map(x=>`<span class="profile-chip ${x.profile.id===r.profile.id?'chosen':''}">${x.profile.label}: ${(100*x.score).toFixed(1)}% • ${x.tests} tes</span>`).join('');
+  const ps=r.profileSelection,scoreRows=ps.results.map(x=>`<span class="profile-chip ${x.profile.id===r.profile.id?'chosen':''}">${x.profile.label}: ${(100*x.score).toFixed(1)}% • posisi ${(100*x.position).toFixed(1)}% • ${x.tests} tes</span>`).join('');
   const reserveText=r.divergenceReserve.digits.join(' '),reserveState=r.divergenceReserve.active?'AKTIF':'AUDIT';
   $('output').className='result';
   $('output').innerHTML=`
     <div class="result-hero">
-      <span class="mini-title">Formula Murni • ${r.signal.label}</span>
+      <span class="mini-title">${r.balancedActive?'Balanced Formula-Coverage':'Formula Murni'} • ${r.signal.label}</span>
       <h3>6 Digit Formula</h3>${digitCards(r.finalDigits)}
       <div class="five-strong-box"><small>5 Digit Terkuat</small>${digitCards(r.strongFive,'strong-five')}</div>
       <div class="twin-box"><small>Kandidat kembar</small><b>${twinText}</b></div>
-      <p class="tagline">${low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dipisahkan dan tidak memaksa swap.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.'}</p>
+      <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dipisahkan dan tidak memaksa swap.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
     </div>
-    <div class="ecology-card"><div class="backup-head"><div><small>Local Formula Ecology</small><b>${r.profile.label}</b></div><span class="backup-risk">${ps.decisive?'Unggul decisif':'Baseline dipertahankan'}</span></div><div class="profile-chips">${scoreRows}</div><p>Profil hanya berubah bila mengalahkan baseline dengan margin walk-forward minimum. Nama market tidak menjadi kondisi formula.</p></div>
+    <div class="ecology-card"><div class="backup-head"><div><small>Local Formula Ecology</small><b>${r.balancedActive?'Balanced Formula-Coverage':r.profile.label}</b></div><span class="backup-risk">${r.balancedActive?'Konflik horizon':(ps.decisive?'Lolos integrity gate':'Baseline dipertahankan')}</span></div><div class="profile-chips">${scoreRows}</div><p>${r.balancedActive?`Formula core ${r.balancedPortfolio.formulaCore.join(' ')} • coverage anchor ${r.balancedPortfolio.coverageAnchors.join(' ')} • kesepakatan profil ${(100*r.profileAgreement).toFixed(0)}%.`:`Profil berubah hanya bila unggul, akurasi posisi tidak runtuh, dan short-window mempunyai sampel cukup. Margin best ${(100*ps.margin).toFixed(1)} poin.`}</p></div>
     <div class="reserve-card"><div><small>2 Digit Divergence Reserve • ${reserveState}</small><b>${reserveText||'—'}</b></div><p>Satu digit berasal dari keluarga ortogonal dan satu dari konsensus posisi lemah lintas profil. Reserve tidak mengubah 6D, AK, LE, carry cap, atau kembar.</p><div class="recovery-stats"><span>Kesepakatan profil ${(100*r.divergenceReserve.agreement).toFixed(0)}%</span><span>Ortogonal ${r.divergenceReserve.orthogonal??'-'}</span><span>Weak-position ${r.divergenceReserve.weak??'-'}</span></div></div>
     <div class="backup-card"><div class="backup-head"><div><small>Formula Cadangan Ortogonal</small><b>5 Digit Sekunder</b></div><span class="backup-risk">Bukan recovery paksa</span></div>${digitCards(r.secondary.digits,'backup-digit')}<p>Runner-up keluarga formula; tidak dilatih memakai aktual dan tidak menjanjikan minimal tiga digit.</p></div>
     <div class="stats">
@@ -290,8 +330,8 @@ function renderResult(r){
       <div><b>Posisi A</b><p class="tagline">${topFormula(0)}</p></div><div><b>Posisi K</b><p class="tagline">${topFormula(1)}</p></div>
       <div><b>Posisi L</b><p class="tagline">${topFormula(2)}</p></div><div><b>Posisi E</b><p class="tagline">${topFormula(3)}</p></div>
       <div><b>Carry audit</b><p class="tagline">Expected ${r.carry.expected.toFixed(2)} • cap maksimum ${r.carry.cap} • role ${r.carry.role.map((x,i)=>`${POS[i]} ${(100*x).toFixed(0)}%`).join(' | ')}</p></div>
-      <div><b>Anti-overfit</b><p class="tagline">Tidak ada kondisi nama market, digit aktual, rescue pasca-ranking, atau conditional miss recovery. Adaptasi hanya melalui walk-forward lokal.</p></div>
+      <div><b>Integrity gate</b><p class="tagline">Best ${ps.best.profile.label}: posisi ${(100*ps.best.position).toFixed(1)}% • floor ${(100*ps.positionFloor).toFixed(1)}% • ${ps.positionIntegrity?'position OK':'position gagal'} • ${ps.shortWindowIntegrity?'window OK':'window terlalu rapuh'}.</p></div><div><b>Anti-overfit</b><p class="tagline">Tidak ada kondisi nama market, digit aktual, atau rescue pasca-ranking. Balanced mode adalah satu portfolio pra-output dari konsensus formula dan coverage historis.</p></div>
     </div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,selectLocalProfile,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,selectLocalProfile,buildBalancedEcologyPortfolio,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
