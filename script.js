@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.4 • Formula-First Twin Portfolio';
+const APP_VERSION = 'IPHOEL Formula Engine V13.4.1 • Calibrated Twin Occurrence Gate';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -15,6 +15,7 @@ function unique(arr){ return [...new Set((arr||[]).map(Number).filter(Number.isI
 function clamp(x,a=0,b=1){ return Math.max(a,Math.min(b,Number(x)||0)); }
 function sum(arr){ return (arr||[]).reduce((a,b)=>a+(Number(b)||0),0); }
 function mean(arr){ return arr?.length?sum(arr)/arr.length:0; }
+function wilsonLower(h,n,z=1.96){if(!n)return 0;const p=h/n,den=1+z*z/n,center=(p+z*z/(2*n))/den,half=z*Math.sqrt(p*(1-p)/n+z*z/(4*n*n))/den;return Math.max(0,center-half);}
 function countMap(arr){ const m={}; (arr||[]).forEach(x=>m[x]=(m[x]||0)+1); return m; }
 function normalize(arr){ const max=Math.max(1e-9,...arr.map(x=>Math.max(0,Number(x)||0))); return arr.map(x=>Math.max(0,Number(x)||0)/max); }
 function debounce(fn,ms){ let t; return (...args)=>{clearTimeout(t);t=setTimeout(()=>fn(...args),ms);}; }
@@ -38,7 +39,7 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Menguji integritas profil dan konflik horizon','Menyusun 4 Digit Twin Pool dan dua pilihan formula'];
+  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Menguji integritas profil dan konflik horizon','Memisahkan Twin Occurrence Gate dari ranking kandidat'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
@@ -183,7 +184,7 @@ function buildCorePrediction(inputRows,profile){
   while(selected.filter(d=>latestSet.has(d)).length>carry.cap){const victim=selected.filter(d=>latestSet.has(d)&&!protectedSet.has(d)).sort((a,b)=>overall[a]-overall[b])[0];if(victim==null)break;const incoming=overallRank.find(d=>!selected.includes(d)&&!latestSet.has(d));if(incoming==null)break;selected[selected.indexOf(victim)]=incoming;}
   const finalDigits=selected.slice(0,6),strongFive=finalDigits.slice().sort((a,b)=>overall[b]-overall[a]||a-b).slice(0,5),ak=buildPairs(posRank[0],posRank[1]),le=buildPairs(posRank[2],posRank[3]);
   const twin=chooseTwin(training,posRank,model,latest),secondary=buildOrthogonalSecondary(model,overall,strongFive,finalDigits),signal=signalGrade(model,training,posRank,ecology);
-  return {rows,market,latest,targetDay,transitions:training,sameDaySamples:sameDay.length,fallback,model,posRank,ecology,coverage,carry,overall,overallRank,finalDigits,strongFive,ak,le,twin,secondary,signal,profile,activeFormulas:model.byPosition.flat().filter(x=>x.status==='ACTIVE'),tieFormulas:model.byPosition.flat().filter(x=>x.status==='TIE')};
+  return {rows,market,latest,targetDay,transitions:training,sameDayTransitions:sameDay,sameDaySamples:sameDay.length,fallback,model,posRank,ecology,coverage,carry,overall,overallRank,finalDigits,strongFive,ak,le,twin,secondary,signal,profile,activeFormulas:model.byPosition.flat().filter(x=>x.status==='ACTIVE'),tieFormulas:model.byPosition.flat().filter(x=>x.status==='TIE')};
 }
 function profileBacktest(rows,profile,sourceDay,targetDay){
   const chrono=rows.slice().reverse(),tests=[];
@@ -266,12 +267,12 @@ function buildPrediction(inputRows){
   const twin=balancedActive?(agreedTwin&&agreedTwin[1]>=3?{...votedTwin,profileVotes:agreedTwin[1]}:null):selectedCore.twin;
   const core=balancedActive?{...selectedCore,finalDigits:balanced.digits,strongFive:balanced.strong,twin}:selectedCore;
   const twinReserve=chooseStructuralTwinReserve(core.transitions,core.model,core.strongFive,core.overall,core.twin);
-  const twinPortfolio=buildTwinPortfolio(core,profileRuns,selection,twinReserve);
   const reserve=buildDivergenceReserve(core,profileRuns,selection);
   const ecologyMode=balancedActive?'BALANCED':'PROFILE';
-  const signalPenalty=balancedActive?.18:0;
+  const signalPenalty=balancedActive ? .18 : 0;
   const signal={...core.signal,value:Math.max(0,core.signal.value-signalPenalty)};
   signal.label=signal.value>=.70?'MENENGAH':signal.value>=.52?'RENDAH–MENENGAH':'RENDAH';
+  const twinPortfolio=buildTwinPortfolio({...core,signal,profileAgreement:agreement,balancedActive},profileRuns,selection,twinReserve);
   return {...core,twinReserve,twinPortfolio,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
 }
 function buildPairs(left,right){
@@ -316,7 +317,7 @@ function chooseStructuralTwinReserve(transitions,model,strongFive,overall,strict
 function buildTwinPortfolio(core,profileRuns,profileSelection,twinReserve){
   const runs=profileRuns?.length?profileRuns:[core],weightByProfile={};
   (profileSelection?.results||[]).forEach(x=>weightByProfile[x.profile.id]=Math.max(.05,x.score));
-  const history=core.transitions||[],n=history.length,repeatEvents=history.filter(tr=>new Set(tr.target.digits).size<4),repeatRate=repeatEvents.length/Math.max(1,n);
+  const history=core.sameDayTransitions||[],n=history.length,repeatFlags=history.map(tr=>new Set(tr.target.digits).size<4),repeatEvents=sum(repeatFlags),repeatRate=repeatEvents/Math.max(1,n);
   const shapeHistory=TWIN_SHAPES.map(([p,q,label])=>{
     const same=history.filter(tr=>tr.target.digits[p]===tr.target.digits[q]),digitHits=Array(10).fill(0);
     same.forEach(tr=>digitHits[tr.target.digits[p]]++);
@@ -348,10 +349,25 @@ function buildTwinPortfolio(core,profileRuns,profileSelection,twinReserve){
     return {digit,score:bestShape.score+auditBonus,formulaIndex:bestShape.pairFormula,overallEvidence,familyEvidence,profileSupport,supportingProfiles,bestShape,strictMatch,structuralMatch};
   }).sort((a,b)=>b.score-a.score||b.formulaIndex-a.formulaIndex||b.profileSupport-a.profileSupport||a.digit-b.digit);
   const pool=candidates.slice(0,4),choices=pool.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1}));
-  const formulaStrength=mean(choices.map(x=>x.formulaIndex)),repeatPosterior=(repeatEvents.length+2)/(n+5);
-  const state=n>=6&&repeatRate>=.40&&formulaStrength>=.34?'DUKUNGAN KUAT':formulaStrength>=.24?'OPSIONAL':'AUDIT';
-  const context=repeatRate>=.40?'Repeat historis teramati':'Repeat historis tidak dominan';
-  return {pool,choices,digits:pool.map(x=>x.digit),candidates,repeatEvents:repeatEvents.length,repeatRate,repeatPosterior,formulaStrength,state,context,samples:n};
+  const formulaStrength=mean(choices.map(x=>x.formulaIndex)),repeatPosterior=(repeatEvents+2)/(n+5),wilsonLow=wilsonLower(repeatEvents,n);
+  const recencyWeights=repeatFlags.map((_,i)=>.65+.70*(i+1)/Math.max(1,n)),recentRate=sum(repeatFlags.map((x,i)=>x*recencyWeights[i]))/Math.max(.0001,sum(recencyWeights));
+  const recentFlags=repeatFlags.slice(-Math.min(3,n)),recentWindowRate=mean(recentFlags);let dryStreak=0;
+  for(let i=repeatFlags.length-1;i>=0&&!repeatFlags[i];i--)dryStreak++;
+  const agreement=core.profileAgreement??1,signalValue=core.signal?.value||0,strictEvidence=Boolean(core.twin||twinReserve);
+  const candidateShapeEvidence=choices.some(x=>x.strictMatch||x.structuralMatch||(x.bestShape.events>=2&&x.bestShape.digitHits[x.digit]>=1));
+  const integrityStrong=!core.balancedActive&&signalValue>=.58&&agreement>=.68;
+  const occurrenceStrong=n>=7&&repeatRate>=.65&&repeatPosterior>=.58&&wilsonLow>=.35&&recentRate>=.60&&recentWindowRate>=.50&&dryStreak<2;
+  const occurrenceOptional=n>=6&&repeatPosterior>=.45&&wilsonLow>=.20&&recentRate>=.45&&recentWindowRate>=.34&&dryStreak<2;
+  const state=integrityStrong&&occurrenceStrong&&strictEvidence&&candidateShapeEvidence?'DUKUNGAN KUAT':(!core.balancedActive&&signalValue>=.52&&agreement>=.60&&occurrenceOptional&&strictEvidence&&candidateShapeEvidence?'OPSIONAL':'ABSTAIN');
+  const reasons=[];
+  if(n<7)reasons.push('sampel target-day terbatas');
+  if(dryStreak>=2)reasons.push(`${dryStreak} target terbaru non-repeat`);
+  if(signalValue<.52)reasons.push('sinyal formula rendah');
+  if(agreement<.60||core.balancedActive)reasons.push('profil berkonflik');
+  if(!strictEvidence)reasons.push('strict dan structural gate kosong');
+  if(!candidateShapeEvidence)reasons.push('kandidat belum punya dukungan bentuk yang cukup');
+  const context=state==='DUKUNGAN KUAT'?'Occurrence gate dan kandidat formula sama-sama terkonfirmasi':state==='OPSIONAL'?'Repeat boleh dibaca sebagai opsi bersyarat':`Tidak ada panggilan repeat${reasons.length?` • ${reasons.join(' • ')}`:''}`;
+  return {pool,choices,digits:pool.map(x=>x.digit),candidates,repeatEvents,repeatRate,repeatPosterior,wilsonLow,recentRate,recentWindowRate,dryStreak,formulaStrength,state,context,reasons,samples:n,targetDayOnly:true,strictEvidence,candidateShapeEvidence,agreement,signalValue};
 }
 function buildOrthogonalSecondary(model,overall,strongFive,finalDigits){
   const primary=new Set(strongFive),scores=Array(10).fill(0),reasons=Array.from({length:10},()=>[]);
@@ -372,7 +388,7 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
-function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan ${x.choice} • ${x.bestShape.label}</small><b>${x.pair}</b><span>Indeks formula ${Math.round(100*x.formulaIndex)}/100 • dukungan ${x.supportingProfiles}/${LOCAL_PROFILES.length} profil</span></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan bersyarat ${x.choice} • posisi formula ${x.bestShape.label}</small><b>${x.pair}</b><span>Indeks kandidat ${Math.round(100*x.formulaIndex)}/100 • dukungan ${x.supportingProfiles}/${LOCAL_PROFILES.length} profil</span></div>`).join('')}</div>`;}
 function renderResult(r){
   const topFormula=p=>r.model.byPosition[p].filter(x=>x.status!=='BLOCKED').slice(0,5).map(x=>`${x.label}→${x.digit} (${x.hits}/${x.trials}, ${x.status})`).join('<br>')||'Tidak ada formula lolos';
   const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar utama yang lolos gate';
@@ -386,11 +402,12 @@ function renderResult(r){
       <span class="mini-title">${r.balancedActive?'Balanced Formula-Coverage':'Formula Murni'} • ${r.signal.label}</span>
       <h3>6 Digit Formula</h3>${digitCards(r.finalDigits)}
       <div class="five-strong-box"><small>5 Digit Terkuat</small>${digitCards(r.strongFive,'strong-five')}</div>
-      <div class="twin-portfolio">
-        <div class="twin-portfolio-head"><div><small>Formula-First Twin Portfolio</small><b>4 Digit Twin Pool</b></div><span>${r.twinPortfolio.state}</span></div>
+      <div class="twin-portfolio ${r.twinPortfolio.state==='ABSTAIN'?'is-abstain':(r.twinPortfolio.state==='OPSIONAL'?'is-optional':'is-strong')}">
+        <div class="twin-portfolio-head"><div><small>Twin Occurrence Gate • ${r.twinPortfolio.state}</small><b>4 Digit Twin Pool</b></div><span>${r.twinPortfolio.state}</span></div>
         ${digitCards(r.twinPortfolio.digits,'twin-pool-digit')}
-        <div class="twin-choice-title">2 Pilihan Kembar</div>${twinChoiceCards(r.twinPortfolio.choices)}
-        <p>${r.twinPortfolio.context} ${(100*r.twinPortfolio.repeatRate).toFixed(0)}% (${r.twinPortfolio.repeatEvents}/${r.twinPortfolio.samples} transisi). Ranking memakai formula, posisi, konsensus profil, dan coverage sebagai bukti utama; prior bentuk kembar dibatasi maksimum 4%. Dua pilihan adalah kandidat bila repeat terjadi—bukan perintah bahwa hasil berikutnya harus kembar.</p>
+        <div class="twin-choice-title">2 Pilihan Kembar Bersyarat</div>${twinChoiceCards(r.twinPortfolio.choices)}
+        <p><b>${r.twinPortfolio.context}.</b> Twin Pool terpisah dari keputusan occurrence: ranking memakai formula, posisi, konsensus profil, dan coverage; prior bentuk kembar maksimum 4%. Saat gate ABSTAIN, kedua pasangan hanya bahan audit dan bukan panggilan kembar.</p>
+        <div class="twin-gate-metrics"><span>Target-day ${r.twinPortfolio.samples}</span><span>Repeat ${(100*r.twinPortfolio.repeatRate).toFixed(0)}%</span><span>Recent ${(100*r.twinPortfolio.recentRate).toFixed(0)}%</span><span>Wilson low ${(100*r.twinPortfolio.wilsonLow).toFixed(0)}%</span><span>Sinyal ${(100*r.twinPortfolio.signalValue).toFixed(0)}%</span><span>Profil ${(100*r.twinPortfolio.agreement).toFixed(0)}%</span></div>
         <div class="twin-audit"><span>Strict replay: ${twinText}</span><span>Structural reserve: ${twinReserveText}</span></div>
       </div>
       <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking. Twin Portfolio membaca semua profil sebelum output.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dan pilihan kembar tidak memaksa swap atau repeat.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
