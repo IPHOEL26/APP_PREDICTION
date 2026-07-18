@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.5 • Nested 6D–5D–4D Formula Ladder';
+const APP_VERSION = 'IPHOEL Formula Engine V13.6 • Position-Coverage Core + Positional Hedge';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -23,7 +23,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Formula Evidence Ladder';
+  $('modelPill').textContent='Position-Coverage Ladder';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -266,6 +266,38 @@ function buildBalancedEcologyPortfolio(profileRuns,selection){
 function compareFormulaEvidence(a,b){
   return b.activeProfiles-a.activeProfiles||b.activePositions-a.activePositions||b.activeFamilies-a.activeFamilies||b.topThreePlacements-a.topThreePlacements||b.activeRules-a.activeRules||b.rankPoints-a.rankPoints||b.tieFamilies-a.tieFamilies||a.digit-b.digit;
 }
+function comparePositionEvidence(a,b){
+  return b.strength-a.strength||b.activeFamilies-a.activeFamilies||b.activeRules-a.activeRules||b.activeProfiles-a.activeProfiles||b.rankPoints-a.rankPoints||a.digit-b.digit;
+}
+function buildPositionFormulaLedger(profileRuns){
+  const evidence=Array.from({length:4},(_,p)=>DIGITS.map(digit=>{
+    const profiles=new Set(),families=new Set(),rules=new Set();let topThreePlacements=0,rankPoints=0,tieRules=0;
+    profileRuns.forEach(run=>{
+      let active=false;
+      run.model.byPosition[p].forEach(f=>{
+        if(f.digit!==digit)return;
+        if(f.status==='ACTIVE'){active=true;families.add(f.family);rules.add(`${run.profile.id}|${f.id}`);}
+        else if(f.status==='TIE')tieRules++;
+      });
+      if(active)profiles.add(run.profile.id);
+      const idx=run.posRank[p].findIndex(x=>x.digit===digit);
+      if(idx>=0&&idx<5){rankPoints+=5-idx;if(idx<3)topThreePlacements++;}
+    });
+    const strength=4*profiles.size+3*families.size+rules.size+topThreePlacements+Math.floor(rankPoints/5);
+    return {digit,position:p,activeProfiles:profiles.size,activeFamilies:families.size,activeRules:rules.size,topThreePlacements,rankPoints,tieRules,strength};
+  }));
+  const ranks=evidence.map(rows=>rows.slice().sort(comparePositionEvidence));
+  return {evidence,ranks};
+}
+function choosePositionCore(six,positionLedger){
+  const ranks=positionLedger.ranks.map(rows=>rows.filter(x=>six.includes(x.digit))),candidates=[];
+  ranks[0].forEach(a=>ranks[1].forEach(k=>ranks[2].forEach(l=>ranks[3].forEach(e=>{
+    const rows=[a,k,l,e];if(new Set(rows.map(x=>x.digit)).size<4)return;
+    candidates.push({rows,strength:sum(rows.map(x=>x.strength)),families:sum(rows.map(x=>x.activeFamilies)),rules:sum(rows.map(x=>x.activeRules)),rankPoints:sum(rows.map(x=>x.rankPoints))});
+  }))));
+  candidates.sort((a,b)=>b.strength-a.strength||b.families-a.families||b.rules-a.rules||b.rankPoints-a.rankPoints||a.rows.map(x=>x.digit).join('').localeCompare(b.rows.map(x=>x.digit).join('')));
+  return candidates[0]?.rows.map(x=>x.digit)||six.slice(0,4);
+}
 function buildFormulaEvidenceLadder(profileRuns){
   const evidence=DIGITS.map(digit=>{
     const profiles=new Set(),positions=new Set(),activeFamilies=new Set(),activeRules=new Set(),tieFamilies=new Set();let topThreePlacements=0,rankPoints=0;
@@ -284,13 +316,13 @@ function buildFormulaEvidenceLadder(profileRuns){
     });
     return {digit,activeProfiles:profiles.size,activePositions:positions.size,activeFamilies:activeFamilies.size,activeRules:activeRules.size,tieFamilies:tieFamilies.size,topThreePlacements,rankPoints};
   }).sort(compareFormulaEvidence);
-  const six=evidence.slice(0,6).map(x=>x.digit),five=six.slice(0,5),four=five.slice(0,4);
-  return {six,five,four,evidence};
+  const six=evidence.slice(0,6).map(x=>x.digit),positionLedger=buildPositionFormulaLedger(profileRuns),four=choosePositionCore(six,positionLedger),remaining=six.filter(d=>!four.includes(d)),five=[...four,remaining[0]];
+  return {six,five,four,evidence,positionLedger};
 }
 function compareHedgeEvidence(a,b){
   return b.tieProfiles-a.tieProfiles||b.tiePositions-a.tiePositions||b.tieFamilies-a.tieFamilies||b.tieRules-a.tieRules||b.runnerPlacements-a.runnerPlacements||b.runnerPoints-a.runnerPoints||a.digit-b.digit;
 }
-function buildFormulaHedge(profileRuns,strongFive){
+function buildFormulaHedge(profileRuns,strongFive,positionLedger){
   const primary=new Set(strongFive),evidence=DIGITS.map(digit=>{
     const profiles=new Set(),positions=new Set(),families=new Set(),rules=new Set();let runnerPlacements=0,runnerPoints=0;
     profileRuns.forEach(run=>{
@@ -304,15 +336,17 @@ function buildFormulaHedge(profileRuns,strongFive){
     });
     return {digit,tieProfiles:profiles.size,tiePositions:positions.size,tieFamilies:families.size,tieRules:rules.size,runnerPlacements,runnerPoints};
   });
-  const bridge=evidence.filter(x=>primary.has(x.digit)).sort(compareHedgeEvidence).slice(0,2),alternatives=evidence.filter(x=>!primary.has(x.digit)).sort(compareHedgeEvidence).slice(0,3);
+  const bridge=evidence.filter(x=>primary.has(x.digit)).sort(compareHedgeEvidence).slice(0,2);
+  const positionalAlternatives=DIGITS.filter(d=>!primary.has(d)).map(digit=>positionLedger.ranks.map(rows=>rows.find(x=>x.digit===digit)).sort(comparePositionEvidence)[0]).sort(comparePositionEvidence);
+  const alternatives=positionalAlternatives.slice(0,3).map(x=>evidence.find(row=>row.digit===x.digit));
   const selected=[...bridge,...alternatives].sort(compareHedgeEvidence);
   return {digits:selected.map(x=>x.digit),bridge:bridge.map(x=>x.digit),alternatives:alternatives.map(x=>x.digit),evidence:evidence.sort(compareHedgeEvidence)};
 }
 function buildPrediction(inputRows){
   const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),profileRuns=LOCAL_PROFILES.map(p=>buildFormulaRelationRun(rows,p));
   const selectedCore=profileRuns.find(r=>r.profile.id==='formula-first')||profileRuns[0];
-  const formulaLadder=buildFormulaEvidenceLadder(profileRuns),secondary=buildFormulaHedge(profileRuns,formulaLadder.five);
-  const core={...selectedCore,finalDigits:formulaLadder.six,strongFive:formulaLadder.five,strongFour:formulaLadder.four,secondary,formulaLadder};
+  const formulaLadder=buildFormulaEvidenceLadder(profileRuns),secondary=buildFormulaHedge(profileRuns,formulaLadder.five,formulaLadder.positionLedger),ak=buildPairs(selectedCore.posRank[0],selectedCore.posRank[1]),le=buildPairs(selectedCore.posRank[2],selectedCore.posRank[3]);
+  const core={...selectedCore,finalDigits:formulaLadder.six,strongFive:formulaLadder.five,strongFour:formulaLadder.four,secondary,formulaLadder,ak,le};
   const twinPortfolio=buildTwinPortfolio(core,profileRuns);
   return {...core,twinPortfolio,profileRuns};
 }
@@ -413,7 +447,8 @@ function renderResult(r){
       <div class="core-twin-box"><div><small>2 Pilihan Kembar dari 4D Inti</small><b>Penjagaan formula</b></div>${twinChoiceCards(r.twinPortfolio.choices)}<p>Kembar tidak mengambil digit di luar empat digit inti dan tidak menyatakan bahwa repeat pasti terjadi.</p></div>
     </div>
     <div class="backup-card hedge-card"><div class="backup-head"><div><small>Pagar Formula Ortogonal</small><b>5 Digit Cadangan</b></div><span class="backup-risk">2 jembatan + 3 alternatif</span></div>${digitCards(r.secondary.digits,'backup-digit')}<div class="hedge-map"><span>Jembatan dari 5D: ${r.secondary.bridge.join(' ')}</span><span>Alternatif formula: ${r.secondary.alternatives.join(' ')}</span></div><p>Bukan kebalikan penuh dari lima digit terkuat. Dua digit menjaga hubungan dengan formula utama, sedangkan tiga digit membaca keluarga rumus runner-up.</p></div>
+    <div class="akle-section relation-pairs"><h4>AKLE Position-First</h4><div class="akle-grid"><div><small>5 Pilihan AK</small>${pairCards(r.ak,'ak')}</div><div><small>5 Pilihan LE</small>${pairCards(r.le,'le')}</div></div></div>
     <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga secara otomatis. Tidak ada persentase peluang digit, kondisi nama market, atau penanaman hasil aktual.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildFormulaEvidenceLadder,buildFormulaHedge,buildTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildFormulaHedge,buildTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
