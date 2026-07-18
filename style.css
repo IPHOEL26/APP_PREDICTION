@@ -182,3 +182,6 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 
 /* V13.9 • History-conditioned value recurrence */
 .history-conditioned-seat{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #a5b4fc;border-radius:16px;background:linear-gradient(135deg,#eef2ff,#f8fafc);padding:9px 11px;color:#3730a3}.history-conditioned-seat b{font-size:10px;text-transform:uppercase;letter-spacing:.06em}.history-conditioned-seat span{font-size:10px;font-weight:800;text-align:right}@media(max-width:620px){.history-conditioned-seat{align-items:flex-start;flex-direction:column}.history-conditioned-seat span{text-align:left}}
+
+/* V13.10 • Dual-horizon target-day bridge */
+.target-day-bridge-seat{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #67e8f9;border-radius:16px;background:linear-gradient(135deg,#ecfeff,#f0fdf4);padding:9px 11px;color:#155e75}.target-day-bridge-seat b{font-size:10px;text-transform:uppercase;letter-spacing:.06em}.target-day-bridge-seat span{font-size:10px;font-weight:800;text-align:right}@media(max-width:620px){.target-day-bridge-seat{align-items:flex-start;flex-direction:column}.target-day-bridge-seat span{text-align:left}}
