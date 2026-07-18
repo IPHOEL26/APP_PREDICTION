@@ -179,3 +179,6 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 
 /* V13.8.2 • Pair-balance core promotion */
 .pair-balance-seat.is-core-promotion{border-color:#86efac;background:linear-gradient(135deg,#f0fdf4,#ecfeff);color:#166534}.pair-balance-seat.is-core-promotion b{background:#dcfce7;border-radius:999px;padding:5px 8px}
+
+/* V13.9 • History-conditioned value recurrence */
+.history-conditioned-seat{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #a5b4fc;border-radius:16px;background:linear-gradient(135deg,#eef2ff,#f8fafc);padding:9px 11px;color:#3730a3}.history-conditioned-seat b{font-size:10px;text-transform:uppercase;letter-spacing:.06em}.history-conditioned-seat span{font-size:10px;font-weight:800;text-align:right}@media(max-width:620px){.history-conditioned-seat{align-items:flex-start;flex-direction:column}.history-conditioned-seat span{text-align:left}}
