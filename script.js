@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.6 • Position-Coverage Core + Positional Hedge';
+const APP_VERSION = 'IPHOEL Formula Engine V13.7 • Independent Relation Lattice';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -23,7 +23,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Position-Coverage Ladder';
+  $('modelPill').textContent='Independent Relation Lattice';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -39,7 +39,7 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay keluarga rumus lintas posisi','Menyusun tangga formula 6D → 5D → 4D','Mengambil kembar dari 4D dan pagar formula ortogonal'];
+  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Menguji independensi keluarga rumus','Menyusun tangga formula 6D → 5D → 4D','Mengambil kembar dari repeat-family dan 4D inti'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
@@ -317,7 +317,53 @@ function buildFormulaEvidenceLadder(profileRuns){
     return {digit,activeProfiles:profiles.size,activePositions:positions.size,activeFamilies:activeFamilies.size,activeRules:activeRules.size,tieFamilies:tieFamilies.size,topThreePlacements,rankPoints};
   }).sort(compareFormulaEvidence);
   const six=evidence.slice(0,6).map(x=>x.digit),positionLedger=buildPositionFormulaLedger(profileRuns),four=choosePositionCore(six,positionLedger),remaining=six.filter(d=>!four.includes(d)),five=[...four,remaining[0]];
-  return {six,five,four,evidence,positionLedger};
+  return {six,five,four,evidence,positionLedger,mode:'position-coverage',modeLabel:'Position-Coverage Route',routeNote:'Ledger posisi memiliki keragaman keluarga yang cukup; tangga memakai anchor unik A–K–L–E di dalam bukti formula utama.'};
+}
+function formulaSetMembershipStats(transitions,formula){
+  const hitIndexes=[],n=transitions.length,cut=Math.floor(n/2);
+  transitions.forEach((tr,i)=>{
+    const digit=formula.fn(tr.source.digits);
+    if(new Set(tr.target.digits).has(digit))hitIndexes.push(i);
+  });
+  const hits=hitIndexes.length,recentHits=hitIndexes.filter(i=>i>=cut).length;
+  const hitBands=new Set(hitIndexes.map(i=>Math.min(2,Math.floor(3*i/Math.max(1,n))))).size;
+  let status='BLOCKED';
+  if(n>=7&&hits>=3&&recentHits>=1&&hitBands>=2)status='ACTIVE';
+  else if(n>=5&&hits>=2&&(recentHits>=1||hitBands>=2))status='TIE';
+  return {hits,recentHits,hitBands,status};
+}
+function compareRelationAnchor(a,b){
+  return b.activeFamilies-a.activeFamilies||b.activeRules-a.activeRules||b.activeRecentHits-a.activeRecentHits||b.activeHits-a.activeHits||b.confluenceFamilies-a.confluenceFamilies||a.digit-b.digit;
+}
+function compareRelationEcho(a,b){
+  return b.tieFamilies-a.tieFamilies||b.confluenceFamilies-a.confluenceFamilies||b.tieRules-a.tieRules||b.tieRecentHits-a.tieRecentHits||b.activeFamilies-a.activeFamilies||a.digit-b.digit;
+}
+function buildIndependentRelationLattice(profileRuns,positionLadder){
+  const run=profileRuns.find(x=>x.profile.id==='formula-first')||profileRuns[0],latest=run.latest;
+  const evidence=DIGITS.map(digit=>({digit,activeFamilySet:new Set(),tieFamilySet:new Set(),confluenceFamilySet:new Set(),activeRules:0,tieRules:0,activeHits:0,tieHits:0,activeRecentHits:0,tieRecentHits:0}));
+  formulaLibrary().forEach(formula=>{
+    const digit=formula.fn(latest.digits),row=evidence[digit],stats=formulaSetMembershipStats(run.transitions,formula);
+    row.confluenceFamilySet.add(formula.family);
+    if(stats.status==='ACTIVE'){
+      row.activeFamilySet.add(formula.family);row.activeRules++;row.activeHits+=stats.hits;row.activeRecentHits+=stats.recentHits;
+    }else if(stats.status==='TIE'){
+      row.tieFamilySet.add(formula.family);row.tieRules++;row.tieHits+=stats.hits;row.tieRecentHits+=stats.recentHits;
+    }
+  });
+  evidence.forEach(row=>{
+    row.activeFamilies=row.activeFamilySet.size;row.tieFamilies=row.tieFamilySet.size;row.confluenceFamilies=row.confluenceFamilySet.size;
+    delete row.activeFamilySet;delete row.tieFamilySet;delete row.confluenceFamilySet;
+  });
+  const anchors=evidence.slice().sort(compareRelationAnchor),echoes=evidence.slice().sort(compareRelationEcho),four=[anchors[0].digit];
+  echoes.forEach(row=>{if(four.length<4&&!four.includes(row.digit))four.push(row.digit);});
+  const five=four.slice();anchors.forEach(row=>{if(five.length<5&&!five.includes(row.digit))five.push(row.digit);});
+  const six=five.slice();anchors.forEach(row=>{if(six.length<6&&!six.includes(row.digit))six.push(row.digit);});
+  return {six,five,four,evidence,anchors,echoes,positionLedger:positionLadder.positionLedger,mode:'independent-family',modeLabel:'Independent-Family Route',routeNote:'Suara profil terdeteksi mengulang keluarga rumus yang sama. Inti memakai satu anchor replay dan tiga echo dari keluarga berbeda; profil duplikat tidak dihitung sebagai bukti baru.'};
+}
+function needsIndependentRelationRoute(positionLadder){
+  const leaders=positionLadder.evidence.slice(0,2),families=sum(leaders.map(x=>x.activeFamilies)),rules=sum(leaders.map(x=>x.activeRules));
+  const leaderBreadth=leaders[0]?.activePositions||0;
+  return families>0&&leaderBreadth<=2&&4*rules>=9*families;
 }
 function compareHedgeEvidence(a,b){
   return b.tieProfiles-a.tieProfiles||b.tiePositions-a.tiePositions||b.tieFamilies-a.tieFamilies||b.tieRules-a.tieRules||b.runnerPlacements-a.runnerPlacements||b.runnerPoints-a.runnerPoints||a.digit-b.digit;
@@ -345,10 +391,11 @@ function buildFormulaHedge(profileRuns,strongFive,positionLedger){
 function buildPrediction(inputRows){
   const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),profileRuns=LOCAL_PROFILES.map(p=>buildFormulaRelationRun(rows,p));
   const selectedCore=profileRuns.find(r=>r.profile.id==='formula-first')||profileRuns[0];
-  const formulaLadder=buildFormulaEvidenceLadder(profileRuns),secondary=buildFormulaHedge(profileRuns,formulaLadder.five,formulaLadder.positionLedger),ak=buildPairs(selectedCore.posRank[0],selectedCore.posRank[1]),le=buildPairs(selectedCore.posRank[2],selectedCore.posRank[3]);
+  const positionLadder=buildFormulaEvidenceLadder(profileRuns),independentLattice=buildIndependentRelationLattice(profileRuns,positionLadder),useIndependent=needsIndependentRelationRoute(positionLadder);
+  const formulaLadder=useIndependent?independentLattice:positionLadder,secondary=buildFormulaHedge(profileRuns,formulaLadder.five,positionLadder.positionLedger),ak=buildPairs(selectedCore.posRank[0],selectedCore.posRank[1]),le=buildPairs(selectedCore.posRank[2],selectedCore.posRank[3]);
   const core={...selectedCore,finalDigits:formulaLadder.six,strongFive:formulaLadder.five,strongFour:formulaLadder.four,secondary,formulaLadder,ak,le};
-  const twinPortfolio=buildTwinPortfolio(core,profileRuns);
-  return {...core,twinPortfolio,profileRuns};
+  const twinPortfolio=useIndependent?buildIndependentTwinPortfolio(core):buildTwinPortfolio(core,profileRuns);
+  return {...core,twinPortfolio,profileRuns,positionLadder,independentLattice,useIndependent};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
@@ -413,6 +460,46 @@ function buildTwinPortfolio(core,profileRuns){
   const candidates=pool.slice().sort(compareTwinEvidence),choices=candidates.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1}));
   return {pool,choices,digits:coreFour,candidates,state:'PENJAGAAN FORMULA'};
 }
+function allSequentialTransitions(rows){
+  const chrono=rows.slice().reverse(),out=[];
+  for(let i=0;i<chrono.length-1;i++)out.push({source:chrono[i],target:chrono[i+1],index:i});
+  return out;
+}
+function repeatFormulaHit(formula,tr){
+  const digit=formula.fn(tr.source.digits);
+  return tr.target.digits.filter(x=>x===digit).length>=2;
+}
+function twinShapeEvidence(formulas,transitions,shapes){
+  return shapes.map(([p,q,label])=>{
+    const families=new Set(),events=new Set();
+    formulas.forEach(formula=>transitions.forEach((tr,i)=>{
+      const digit=formula.fn(tr.source.digits);
+      if(tr.target.digits[p]===digit&&tr.target.digits[q]===digit){families.add(formula.family);events.add(i);}
+    }));
+    return {label,families:families.size,events:events.size};
+  });
+}
+function compareIndependentTwin(a,b){
+  return b.activeFamilies-a.activeFamilies||b.activeRules-a.activeRules||b.targetFamilies-a.targetFamilies||b.bestShape.targetFamilies-a.bestShape.targetFamilies||b.activeHits-a.activeHits||b.targetHits-a.targetHits||a.digit-b.digit;
+}
+function buildIndependentTwinPortfolio(core){
+  const coreFour=core.strongFour.slice(0,4),broad=allSequentialTransitions(core.rows),target=core.transitions||[],formulas=formulaLibrary();
+  const candidates=coreFour.map(digit=>{
+    const current=formulas.filter(f=>f.fn(core.latest.digits)===digit),activeFamilySet=new Set(),targetFamilySet=new Set();let activeRules=0,activeHits=0,targetRules=0,targetHits=0;
+    current.forEach(formula=>{
+      const hitIndexes=[];broad.forEach((tr,i)=>{if(repeatFormulaHit(formula,tr))hitIndexes.push(i);});
+      const hitBands=new Set(hitIndexes.map(i=>Math.min(2,Math.floor(3*i/Math.max(1,broad.length))))).size;
+      if(hitIndexes.length>=2&&hitBands>=2){activeFamilySet.add(formula.family);activeRules++;activeHits+=hitIndexes.length;}
+      const localHits=target.filter(tr=>repeatFormulaHit(formula,tr)).length;
+      if(localHits){targetFamilySet.add(formula.family);targetRules++;targetHits+=localHits;}
+    });
+    const broadShapes=twinShapeEvidence(current,broad,TWIN_SHAPES),targetShapes=twinShapeEvidence(current,target,TWIN_SHAPES);
+    const shapes=TWIN_SHAPES.map((shape,i)=>({label:shape[2],targetFamilies:targetShapes[i].families,targetEvents:targetShapes[i].events,broadFamilies:broadShapes[i].families,broadEvents:broadShapes[i].events})).sort((a,b)=>b.targetFamilies-a.targetFamilies||b.targetEvents-a.targetEvents||b.broadFamilies-a.broadFamilies||b.broadEvents-a.broadEvents||a.label.localeCompare(b.label));
+    return {digit,activeFamilies:activeFamilySet.size,activeRules,activeHits,targetFamilies:targetFamilySet.size,targetRules,targetHits,bestShape:shapes[0],shapes};
+  }).sort(compareIndependentTwin);
+  const choices=candidates.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1,relationNote:'Repeat-family independen dari 4D inti'}));
+  return {pool:candidates,choices,digits:coreFour,candidates,state:'PENJAGAAN REPEAT-FAMILY',mode:'independent-repeat'};
+}
 function buildOrthogonalSecondary(model,overall,strongFive,finalDigits){
   const primary=new Set(strongFive),scores=Array(10).fill(0),reasons=Array.from({length:10},()=>[]);
   for(let p=0;p<4;p++)for(let d=0;d<10;d++){
@@ -432,23 +519,25 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
-function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • relasi ${x.bestShape.label}</small><b>${x.pair}</b><span>Diambil langsung dari 4D inti</span></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • relasi ${x.bestShape.label}</small><b>${x.pair}</b><span>${x.relationNote||'Diambil langsung dari 4D inti'}</span></div>`).join('')}</div>`;}
 function renderResult(r){
   $('output').className='result';
+  if($('modelPill'))$('modelPill').textContent=r.formulaLadder.modeLabel;
   $('output').innerHTML=`
     <div class="result-hero formula-ladder-card">
       <span class="mini-title">Formula Relationship Scan • ${r.market||'-'} → ${r.targetDay}</span>
       <h3>Tangga Prediksi Bersarang</h3>
+      <div class="relation-route ${r.useIndependent?'is-independent':'is-position'}"><b>${r.formulaLadder.modeLabel}</b><span>${r.formulaLadder.routeNote}</span></div>
       <div class="ladder-step ladder-six"><div><small>6 Digit Formula</small><b>15 kombinasi 4D</b></div>${digitCards(r.finalDigits,'ladder-six-digit')}</div>
       <div class="ladder-flow">Disaring oleh kekuatan relasi rumus</div>
       <div class="ladder-step ladder-five"><div><small>5 Digit Terkuat</small><b>5 kombinasi 4D</b></div>${digitCards(r.strongFive,'strong-five')}</div>
       <div class="ladder-flow">Diambil inti paling konsisten</div>
       <div class="ladder-step ladder-four"><div><small>4 Digit Inti Sangat Kuat</small><b>1 kombinasi inti</b></div>${digitCards(r.strongFour,'core-four-digit')}</div>
-      <div class="core-twin-box"><div><small>2 Pilihan Kembar dari 4D Inti</small><b>Penjagaan formula</b></div>${twinChoiceCards(r.twinPortfolio.choices)}<p>Kembar tidak mengambil digit di luar empat digit inti dan tidak menyatakan bahwa repeat pasti terjadi.</p></div>
+      <div class="core-twin-box"><div><small>2 Pilihan Kembar dari 4D Inti</small><b>${r.twinPortfolio.state}</b></div>${twinChoiceCards(r.twinPortfolio.choices)}<p>Kembar tidak mengambil digit di luar empat digit inti dan tidak menyatakan bahwa repeat pasti terjadi.</p></div>
     </div>
     <div class="backup-card hedge-card"><div class="backup-head"><div><small>Pagar Formula Ortogonal</small><b>5 Digit Cadangan</b></div><span class="backup-risk">2 jembatan + 3 alternatif</span></div>${digitCards(r.secondary.digits,'backup-digit')}<div class="hedge-map"><span>Jembatan dari 5D: ${r.secondary.bridge.join(' ')}</span><span>Alternatif formula: ${r.secondary.alternatives.join(' ')}</span></div><p>Bukan kebalikan penuh dari lima digit terkuat. Dua digit menjaga hubungan dengan formula utama, sedangkan tiga digit membaca keluarga rumus runner-up.</p></div>
     <div class="akle-section relation-pairs"><h4>AKLE Position-First</h4><div class="akle-grid"><div><small>5 Pilihan AK</small>${pairCards(r.ak,'ak')}</div><div><small>5 Pilihan LE</small>${pairCards(r.le,'le')}</div></div></div>
-    <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga secara otomatis. Tidak ada persentase peluang digit, kondisi nama market, atau penanaman hasil aktual.</div>`;
+    <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga otomatis. Suara profil yang mengulang rumus sama tidak dianggap sebagai keluarga baru. Tidak ada persentase peluang digit, kondisi nama market, atau penanaman hasil aktual.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildFormulaHedge,buildTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,needsIndependentRelationRoute,buildFormulaHedge,buildTwinPortfolio,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
