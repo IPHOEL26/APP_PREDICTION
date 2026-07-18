@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.4.1 • Calibrated Twin Occurrence Gate';
+const APP_VERSION = 'IPHOEL Formula Engine V13.5 • Nested 6D–5D–4D Formula Ladder';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -23,7 +23,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Ecology Integrity';
+  $('modelPill').textContent='Formula Evidence Ladder';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -39,7 +39,7 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Menguji integritas profil dan konflik horizon','Memisahkan Twin Occurrence Gate dari ranking kandidat'];
+  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay keluarga rumus lintas posisi','Menyusun tangga formula 6D → 5D → 4D','Mengambil kembar dari 4D dan pagar formula ortogonal'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
@@ -120,23 +120,22 @@ function formulaLibrary(){
 }
 
 const LOCAL_PROFILES = [
-  {id:'formula-first',label:'Formula-First Baseline',window:99,activeN:7,activeHits:3,activePost:.25,activeStability:.45,tieN:5,tieHits:2,tiePost:.20,tieMult:.36,recurrence:.34,familyTop:5},
-  {id:'strict-full',label:'Full-Depth Ketat',window:99,activeN:7,activeHits:3,activePost:.25,activeStability:.50,tieN:5,tieHits:2,tiePost:.20,tieMult:.20,recurrence:.24,familyTop:4},
-  {id:'recent-local',label:'Recent Local 4',window:4,activeN:4,activeHits:2,activePost:.24,activeStability:.20,tieN:3,tieHits:2,tiePost:.20,tieMult:.22,recurrence:.18,familyTop:3},
-  {id:'recurrence-full',label:'Full-Depth Recurrence',window:99,activeN:6,activeHits:3,activePost:.25,activeStability:.35,tieN:5,tieHits:2,tiePost:.20,tieMult:.30,recurrence:.48,familyTop:4}
+  {id:'formula-first',label:'Formula-First Baseline',window:99,activeN:7,activeHits:3,tieN:5,tieHits:2,tieMult:.36,familyTop:5},
+  {id:'strict-full',label:'Full-Depth Ketat',window:99,activeN:7,activeHits:3,tieN:5,tieHits:2,tieMult:.20,familyTop:4},
+  {id:'recent-local',label:'Recent Local 4',window:4,activeN:4,activeHits:2,tieN:3,tieHits:2,tieMult:.22,familyTop:3},
+  {id:'relation-depth',label:'Full-Depth Relation',window:99,activeN:6,activeHits:3,tieN:5,tieHits:2,tieMult:.30,familyTop:4}
 ];
 
 function betaMean(h,n,priorHit=1,priorMiss=4){ return (h+priorHit)/(n+priorHit+priorMiss); }
 function formulaStatsProfile(transitions,formula,p,profile){
   let hits=0,recentHits=0; const n=transitions.length,cut=Math.floor(n/2),bands=[{h:0,n:0},{h:0,n:0},{h:0,n:0}];
   transitions.forEach((tr,i)=>{const ok=formula.fn(tr.source.digits)===tr.target.digits[p];if(ok)hits++;if(i>=cut&&ok)recentHits++;const b=Math.min(2,Math.floor(3*i/Math.max(1,n)));bands[b].n++;if(ok)bands[b].h++;});
-  const posterior=betaMean(hits,n),recent=betaMean(recentHits,n-cut||1),bandRates=bands.filter(x=>x.n).map(x=>betaMean(x.h,x.n));
-  const stability=bandRates.length?Math.max(0,1-(Math.max(...bandRates)-Math.min(...bandRates))):0;
+  const observedBands=bands.filter(x=>x.n).length,hitBands=bands.filter(x=>x.h>0).length,spreadFloor=Math.min(2,observedBands);
   let status='BLOCKED';
-  if(n>=profile.activeN&&hits>=profile.activeHits&&posterior>=profile.activePost&&stability>=profile.activeStability)status='ACTIVE';
-  else if(n>=profile.tieN&&hits>=profile.tieHits&&posterior>=profile.tiePost)status='TIE';
-  const reliability=Math.max(0,posterior-.10)*Math.log1p(n)*(.55+.25*recent+.20*stability);
-  return {hits,trials:n,posterior,recent,stability,status,reliability};
+  if(n>=profile.activeN&&hits>=profile.activeHits&&recentHits>=1&&hitBands>=spreadFloor)status='ACTIVE';
+  else if(n>=profile.tieN&&hits>=profile.tieHits&&(recentHits>=1||hitBands>=spreadFloor))status='TIE';
+  const reliability=5*hits+3*recentHits+2*hitBands+(status==='ACTIVE'?4:(status==='TIE'?1:0));
+  return {hits,trials:n,recentHits,hitBands,status,reliability};
 }
 function buildFormulaModelProfile(transitions,latest,profile){
   const formulas=formulaLibrary(),byPosition=Array.from({length:4},()=>[]),score=Array.from({length:4},()=>Array(10).fill(0)),familyContrib=Array.from({length:4},()=>Array.from({length:10},()=>({})));
@@ -168,7 +167,7 @@ function buildCorePrediction(inputRows,profile){
   const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),latest=rows[0],targetDay=inferTargetDay(rows),sameDay=transitionsFor(rows,latest.day,targetDay);
   const fallback=sameDay.length<5; let training=fallback?rows.slice().reverse().slice(0,-1).map((r,i,a)=>i<a.length-1?{source:r,target:a[i+1]}:null).filter(Boolean):sameDay;
   if(!fallback&&profile.window<99)training=training.slice(-profile.window);
-  const model=buildFormulaModelProfile(training,latest,profile); addPositionRecurrenceProfile(model,training,profile);
+  const model=buildFormulaModelProfile(training,latest,profile);
   const posRank=positionRank(model),ecology=positionEcology(posRank,model),coverage=targetCoverage(training),carry=carryProfile(training,latest),posNorm=model.score.map(normalize),baselineMode=profile.id==='formula-first';
   const rawWeights=baselineMode?[1,1,1,1]:ecology.map(x=>.55+.75*x.coherence),weightSum=sum(rawWeights)||1,posWeights=rawWeights.map(x=>x/weightSum);
   const overall=Array(10).fill(0),breadth=Array(10).fill(0);
@@ -185,6 +184,13 @@ function buildCorePrediction(inputRows,profile){
   const finalDigits=selected.slice(0,6),strongFive=finalDigits.slice().sort((a,b)=>overall[b]-overall[a]||a-b).slice(0,5),ak=buildPairs(posRank[0],posRank[1]),le=buildPairs(posRank[2],posRank[3]);
   const twin=chooseTwin(training,posRank,model,latest),secondary=buildOrthogonalSecondary(model,overall,strongFive,finalDigits),signal=signalGrade(model,training,posRank,ecology);
   return {rows,market,latest,targetDay,transitions:training,sameDayTransitions:sameDay,sameDaySamples:sameDay.length,fallback,model,posRank,ecology,coverage,carry,overall,overallRank,finalDigits,strongFive,ak,le,twin,secondary,signal,profile,activeFormulas:model.byPosition.flat().filter(x=>x.status==='ACTIVE'),tieFormulas:model.byPosition.flat().filter(x=>x.status==='TIE')};
+}
+function buildFormulaRelationRun(inputRows,profile){
+  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),latest=rows[0],targetDay=inferTargetDay(rows),sameDay=transitionsFor(rows,latest.day,targetDay);
+  const fallback=sameDay.length<5;let training=fallback?rows.slice().reverse().slice(0,-1).map((r,i,a)=>i<a.length-1?{source:r,target:a[i+1]}:null).filter(Boolean):sameDay;
+  if(!fallback&&profile.window<99)training=training.slice(-profile.window);
+  const model=buildFormulaModelProfile(training,latest,profile),posRank=positionRank(model);
+  return {rows,market,latest,targetDay,transitions:training,sameDayTransitions:sameDay,sameDaySamples:sameDay.length,fallback,model,posRank,profile,activeFormulas:model.byPosition.flat().filter(x=>x.status==='ACTIVE'),tieFormulas:model.byPosition.flat().filter(x=>x.status==='TIE')};
 }
 function profileBacktest(rows,profile,sourceDay,targetDay){
   const chrono=rows.slice().reverse(),tests=[];
@@ -256,24 +262,59 @@ function buildBalancedEcologyPortfolio(profileRuns,selection){
   const strong=digits.slice().sort((a,b)=>combined[b]-combined[a]||a-b).slice(0,5);
   return {digits,strong,formulaCore,coverageAnchors,formulaRank,consensus,positionVotes,familyVotes,coverage,combined};
 }
+
+function compareFormulaEvidence(a,b){
+  return b.activeProfiles-a.activeProfiles||b.activePositions-a.activePositions||b.activeFamilies-a.activeFamilies||b.topThreePlacements-a.topThreePlacements||b.activeRules-a.activeRules||b.rankPoints-a.rankPoints||b.tieFamilies-a.tieFamilies||a.digit-b.digit;
+}
+function buildFormulaEvidenceLadder(profileRuns){
+  const evidence=DIGITS.map(digit=>{
+    const profiles=new Set(),positions=new Set(),activeFamilies=new Set(),activeRules=new Set(),tieFamilies=new Set();let topThreePlacements=0,rankPoints=0;
+    profileRuns.forEach(run=>{
+      let profileActive=false;
+      for(let p=0;p<4;p++){
+        run.model.byPosition[p].forEach(f=>{
+          if(f.digit!==digit)return;
+          if(f.status==='ACTIVE'){profileActive=true;positions.add(p);activeFamilies.add(`${p}|${f.family}`);activeRules.add(`${run.profile.id}|${p}|${f.id}`);}
+          else if(f.status==='TIE')tieFamilies.add(`${p}|${f.family}`);
+        });
+        const idx=run.posRank[p].findIndex(x=>x.digit===digit);
+        if(idx>=0&&idx<5){rankPoints+=5-idx;if(idx<3)topThreePlacements++;}
+      }
+      if(profileActive)profiles.add(run.profile.id);
+    });
+    return {digit,activeProfiles:profiles.size,activePositions:positions.size,activeFamilies:activeFamilies.size,activeRules:activeRules.size,tieFamilies:tieFamilies.size,topThreePlacements,rankPoints};
+  }).sort(compareFormulaEvidence);
+  const six=evidence.slice(0,6).map(x=>x.digit),five=six.slice(0,5),four=five.slice(0,4);
+  return {six,five,four,evidence};
+}
+function compareHedgeEvidence(a,b){
+  return b.tieProfiles-a.tieProfiles||b.tiePositions-a.tiePositions||b.tieFamilies-a.tieFamilies||b.tieRules-a.tieRules||b.runnerPlacements-a.runnerPlacements||b.runnerPoints-a.runnerPoints||a.digit-b.digit;
+}
+function buildFormulaHedge(profileRuns,strongFive){
+  const primary=new Set(strongFive),evidence=DIGITS.map(digit=>{
+    const profiles=new Set(),positions=new Set(),families=new Set(),rules=new Set();let runnerPlacements=0,runnerPoints=0;
+    profileRuns.forEach(run=>{
+      let profileTie=false;
+      for(let p=0;p<4;p++){
+        run.model.byPosition[p].forEach(f=>{if(f.digit===digit&&f.status==='TIE'){profileTie=true;positions.add(p);families.add(`${p}|${f.family}`);rules.add(`${run.profile.id}|${p}|${f.id}`);}});
+        const idx=run.posRank[p].findIndex(x=>x.digit===digit);
+        if(idx>=2&&idx<7){runnerPlacements++;runnerPoints+=7-idx;}
+      }
+      if(profileTie)profiles.add(run.profile.id);
+    });
+    return {digit,tieProfiles:profiles.size,tiePositions:positions.size,tieFamilies:families.size,tieRules:rules.size,runnerPlacements,runnerPoints};
+  });
+  const bridge=evidence.filter(x=>primary.has(x.digit)).sort(compareHedgeEvidence).slice(0,2),alternatives=evidence.filter(x=>!primary.has(x.digit)).sort(compareHedgeEvidence).slice(0,3);
+  const selected=[...bridge,...alternatives].sort(compareHedgeEvidence);
+  return {digits:selected.map(x=>x.digit),bridge:bridge.map(x=>x.digit),alternatives:alternatives.map(x=>x.digit),evidence:evidence.sort(compareHedgeEvidence)};
+}
 function buildPrediction(inputRows){
-  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),targetDay=inferTargetDay(rows),selection=selectLocalProfile(rows,targetDay),profileRuns=LOCAL_PROFILES.map(p=>buildCorePrediction(rows,p));
-  const selectedCore=profileRuns.find(r=>r.profile.id===selection.selected.id)||profileRuns[0],agreement=profileAgreement(profileRuns),balanced=buildBalancedEcologyPortfolio(profileRuns,selection);
-  const bestPositionWeak=selection.best.position<.12,conflict=agreement<.70;
-  const balancedActive=conflict&&(selection.rejected||bestPositionWeak||selectedCore.profile.window<5||agreement<.70);
-  const twinVotes={};profileRuns.forEach(run=>{if(run.twin){const k=`${run.twin.digit}|${run.twin.shape}`;twinVotes[k]=(twinVotes[k]||0)+1;}});
-  const agreedTwin=Object.entries(twinVotes).sort((a,b)=>b[1]-a[1])[0];
-  const votedTwin=agreedTwin?profileRuns.map(run=>run.twin).find(x=>x&&`${x.digit}|${x.shape}`===agreedTwin[0]):null;
-  const twin=balancedActive?(agreedTwin&&agreedTwin[1]>=3?{...votedTwin,profileVotes:agreedTwin[1]}:null):selectedCore.twin;
-  const core=balancedActive?{...selectedCore,finalDigits:balanced.digits,strongFive:balanced.strong,twin}:selectedCore;
-  const twinReserve=chooseStructuralTwinReserve(core.transitions,core.model,core.strongFive,core.overall,core.twin);
-  const reserve=buildDivergenceReserve(core,profileRuns,selection);
-  const ecologyMode=balancedActive?'BALANCED':'PROFILE';
-  const signalPenalty=balancedActive ? .18 : 0;
-  const signal={...core.signal,value:Math.max(0,core.signal.value-signalPenalty)};
-  signal.label=signal.value>=.70?'MENENGAH':signal.value>=.52?'RENDAH–MENENGAH':'RENDAH';
-  const twinPortfolio=buildTwinPortfolio({...core,signal,profileAgreement:agreement,balancedActive},profileRuns,selection,twinReserve);
-  return {...core,twinReserve,twinPortfolio,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
+  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),profileRuns=LOCAL_PROFILES.map(p=>buildFormulaRelationRun(rows,p));
+  const selectedCore=profileRuns.find(r=>r.profile.id==='formula-first')||profileRuns[0];
+  const formulaLadder=buildFormulaEvidenceLadder(profileRuns),secondary=buildFormulaHedge(profileRuns,formulaLadder.five);
+  const core={...selectedCore,finalDigits:formulaLadder.six,strongFive:formulaLadder.five,strongFour:formulaLadder.four,secondary,formulaLadder};
+  const twinPortfolio=buildTwinPortfolio(core,profileRuns);
+  return {...core,twinPortfolio,profileRuns};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
@@ -314,60 +355,29 @@ function chooseStructuralTwinReserve(transitions,model,strongFive,overall,strict
   return {...leader,repeatRate,repeatEvents:repeatEvents.length,label:'Structural breadth reserve'};
 }
 
-function buildTwinPortfolio(core,profileRuns,profileSelection,twinReserve){
-  const runs=profileRuns?.length?profileRuns:[core],weightByProfile={};
-  (profileSelection?.results||[]).forEach(x=>weightByProfile[x.profile.id]=Math.max(.05,x.score));
-  const history=core.sameDayTransitions||[],n=history.length,repeatFlags=history.map(tr=>new Set(tr.target.digits).size<4),repeatEvents=sum(repeatFlags),repeatRate=repeatEvents/Math.max(1,n);
-  const shapeHistory=TWIN_SHAPES.map(([p,q,label])=>{
-    const same=history.filter(tr=>tr.target.digits[p]===tr.target.digits[q]),digitHits=Array(10).fill(0);
-    same.forEach(tr=>digitHits[tr.target.digits[p]]++);
-    return {p,q,label,events:same.length,rate:same.length/Math.max(1,n),posterior:(same.length+1)/(n+4),digitHits};
+function compareTwinEvidence(a,b){
+  return b.bestShape.pairedProfiles-a.bestShape.pairedProfiles||b.bestShape.topPairPlacements-a.bestShape.topPairPlacements||b.bestShape.activeFamilies-a.bestShape.activeFamilies||b.bestShape.activeRules-a.bestShape.activeRules||b.ladderEvidence.activeProfiles-a.ladderEvidence.activeProfiles||b.ladderEvidence.activePositions-a.ladderEvidence.activePositions||a.digit-b.digit;
+}
+function buildTwinPortfolio(core,profileRuns){
+  const runs=profileRuns?.length?profileRuns:[core],coreFour=core.strongFour?.length===4?core.strongFour:core.finalDigits.slice(0,4),ladderRows=core.formulaLadder?.evidence||[];
+  const pool=coreFour.map(digit=>{
+    const shapes=TWIN_SHAPES.map(([p,q,label])=>{
+      const profiles=new Set(),families=new Set(),rules=new Set(),tieFamilies=new Set();let topPairPlacements=0;
+      runs.forEach(run=>{
+        const left=run.model.byPosition[p].filter(f=>f.digit===digit&&f.status==='ACTIVE'),right=run.model.byPosition[q].filter(f=>f.digit===digit&&f.status==='ACTIVE');
+        if(left.length&&right.length)profiles.add(run.profile.id);
+        [...left,...right].forEach(f=>{families.add(`${f.family}`);rules.add(`${run.profile.id}|${f.id}`);});
+        run.model.byPosition[p].filter(f=>f.digit===digit&&f.status==='TIE').forEach(f=>tieFamilies.add(f.family));
+        run.model.byPosition[q].filter(f=>f.digit===digit&&f.status==='TIE').forEach(f=>tieFamilies.add(f.family));
+        const lp=run.posRank[p].findIndex(x=>x.digit===digit),lq=run.posRank[q].findIndex(x=>x.digit===digit);
+        if(lp>=0&&lp<3&&lq>=0&&lq<3)topPairPlacements++;
+      });
+      return {p,q,label,pairedProfiles:profiles.size,activeFamilies:families.size,activeRules:rules.size,tieFamilies:tieFamilies.size,topPairPlacements};
+    }).sort((a,b)=>b.pairedProfiles-a.pairedProfiles||b.topPairPlacements-a.topPairPlacements||b.activeFamilies-a.activeFamilies||b.activeRules-a.activeRules||b.tieFamilies-a.tieFamilies||a.label.localeCompare(b.label));
+    return {digit,bestShape:shapes[0],shapes,ladderEvidence:ladderRows.find(x=>x.digit===digit)||{activeProfiles:0,activePositions:0}};
   });
-  const candidates=DIGITS.map(digit=>{
-    const positionEvidence=Array(4).fill(0);let overallEvidence=0,familyEvidence=0,profileSupport=0,weightSum=0,supportingProfiles=0;
-    runs.forEach(run=>{
-      const w=weightByProfile[run.profile.id]||.5;weightSum+=w;
-      const localPosition=run.model.score.map(a=>(a[digit]||0)/Math.max(.0001,...a));
-      localPosition.forEach((x,p)=>positionEvidence[p]+=w*x);
-      overallEvidence+=w*((run.overall[digit]||0)/Math.max(.0001,...run.overall));
-      const familyBreadth=run.model.familyContrib.reduce((z,p)=>z+Object.keys(p[digit]).length,0);
-      familyEvidence+=w*Math.min(1,familyBreadth/12);
-      const supported=localPosition.filter(x=>x>=.55).length>=2||run.posRank.filter(r=>r.slice(0,3).some(x=>x.digit===digit)).length>=2;
-      if(supported){profileSupport+=w;supportingProfiles++;}
-    });
-    for(let p=0;p<4;p++)positionEvidence[p]/=Math.max(.0001,weightSum);
-    overallEvidence/=Math.max(.0001,weightSum);familyEvidence/=Math.max(.0001,weightSum);profileSupport/=Math.max(.0001,weightSum);
-    const shapes=shapeHistory.map(sh=>{
-      const pairFormula=Math.sqrt(positionEvidence[sh.p]*positionEvidence[sh.q]);
-      const digitPrior=sh.events?(sh.digitHits[digit]+.5)/(sh.events+5):0;
-      const historyContext=.68*sh.posterior+.32*digitPrior;
-      const score=.64*pairFormula+.16*overallEvidence+.10*familyEvidence+.06*profileSupport+.04*historyContext;
-      return {...sh,pairFormula,historyContext,score};
-    }).sort((a,b)=>b.score-a.score||b.pairFormula-a.pairFormula||a.label.localeCompare(b.label));
-    const bestShape=shapes[0],strictMatch=core.twin?.digit===digit,structuralMatch=twinReserve?.digit===digit;
-    const auditBonus=(strictMatch ? .012 : 0)+(structuralMatch ? .006 : 0);
-    return {digit,score:bestShape.score+auditBonus,formulaIndex:bestShape.pairFormula,overallEvidence,familyEvidence,profileSupport,supportingProfiles,bestShape,strictMatch,structuralMatch};
-  }).sort((a,b)=>b.score-a.score||b.formulaIndex-a.formulaIndex||b.profileSupport-a.profileSupport||a.digit-b.digit);
-  const pool=candidates.slice(0,4),choices=pool.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1}));
-  const formulaStrength=mean(choices.map(x=>x.formulaIndex)),repeatPosterior=(repeatEvents+2)/(n+5),wilsonLow=wilsonLower(repeatEvents,n);
-  const recencyWeights=repeatFlags.map((_,i)=>.65+.70*(i+1)/Math.max(1,n)),recentRate=sum(repeatFlags.map((x,i)=>x*recencyWeights[i]))/Math.max(.0001,sum(recencyWeights));
-  const recentFlags=repeatFlags.slice(-Math.min(3,n)),recentWindowRate=mean(recentFlags);let dryStreak=0;
-  for(let i=repeatFlags.length-1;i>=0&&!repeatFlags[i];i--)dryStreak++;
-  const agreement=core.profileAgreement??1,signalValue=core.signal?.value||0,strictEvidence=Boolean(core.twin||twinReserve);
-  const candidateShapeEvidence=choices.some(x=>x.strictMatch||x.structuralMatch||(x.bestShape.events>=2&&x.bestShape.digitHits[x.digit]>=1));
-  const integrityStrong=!core.balancedActive&&signalValue>=.58&&agreement>=.68;
-  const occurrenceStrong=n>=7&&repeatRate>=.65&&repeatPosterior>=.58&&wilsonLow>=.35&&recentRate>=.60&&recentWindowRate>=.50&&dryStreak<2;
-  const occurrenceOptional=n>=6&&repeatPosterior>=.45&&wilsonLow>=.20&&recentRate>=.45&&recentWindowRate>=.34&&dryStreak<2;
-  const state=integrityStrong&&occurrenceStrong&&strictEvidence&&candidateShapeEvidence?'DUKUNGAN KUAT':(!core.balancedActive&&signalValue>=.52&&agreement>=.60&&occurrenceOptional&&strictEvidence&&candidateShapeEvidence?'OPSIONAL':'ABSTAIN');
-  const reasons=[];
-  if(n<7)reasons.push('sampel target-day terbatas');
-  if(dryStreak>=2)reasons.push(`${dryStreak} target terbaru non-repeat`);
-  if(signalValue<.52)reasons.push('sinyal formula rendah');
-  if(agreement<.60||core.balancedActive)reasons.push('profil berkonflik');
-  if(!strictEvidence)reasons.push('strict dan structural gate kosong');
-  if(!candidateShapeEvidence)reasons.push('kandidat belum punya dukungan bentuk yang cukup');
-  const context=state==='DUKUNGAN KUAT'?'Occurrence gate dan kandidat formula sama-sama terkonfirmasi':state==='OPSIONAL'?'Repeat boleh dibaca sebagai opsi bersyarat':`Tidak ada panggilan repeat${reasons.length?` • ${reasons.join(' • ')}`:''}`;
-  return {pool,choices,digits:pool.map(x=>x.digit),candidates,repeatEvents,repeatRate,repeatPosterior,wilsonLow,recentRate,recentWindowRate,dryStreak,formulaStrength,state,context,reasons,samples:n,targetDayOnly:true,strictEvidence,candidateShapeEvidence,agreement,signalValue};
+  const candidates=pool.slice().sort(compareTwinEvidence),choices=candidates.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1}));
+  return {pool,choices,digits:coreFour,candidates,state:'PENJAGAAN FORMULA'};
 }
 function buildOrthogonalSecondary(model,overall,strongFive,finalDigits){
   const primary=new Set(strongFive),scores=Array(10).fill(0),reasons=Array.from({length:10},()=>[]);
@@ -388,46 +398,22 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
-function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan bersyarat ${x.choice} • posisi formula ${x.bestShape.label}</small><b>${x.pair}</b><span>Indeks kandidat ${Math.round(100*x.formulaIndex)}/100 • dukungan ${x.supportingProfiles}/${LOCAL_PROFILES.length} profil</span></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • relasi ${x.bestShape.label}</small><b>${x.pair}</b><span>Diambil langsung dari 4D inti</span></div>`).join('')}</div>`;}
 function renderResult(r){
-  const topFormula=p=>r.model.byPosition[p].filter(x=>x.status!=='BLOCKED').slice(0,5).map(x=>`${x.label}→${x.digit} (${x.hits}/${x.trials}, ${x.status})`).join('<br>')||'Tidak ada formula lolos';
-  const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar utama yang lolos gate';
-  const twinReserveText=r.twinReserve?`${r.twinReserve.digit}${r.twinReserve.digit}`:'Tidak ada kembar struktural';
-  const low=r.signal.label==='RENDAH';
-  const ps=r.profileSelection,scoreRows=ps.results.map(x=>`<span class="profile-chip ${x.profile.id===r.profile.id?'chosen':''}">${x.profile.label}: ${(100*x.score).toFixed(1)}% • posisi ${(100*x.position).toFixed(1)}% • ${x.tests} tes</span>`).join('');
-  const reserveText=r.divergenceReserve.digits.join(' '),reserveState=r.divergenceReserve.active?'AKTIF':'AUDIT';
   $('output').className='result';
   $('output').innerHTML=`
-    <div class="result-hero">
-      <span class="mini-title">${r.balancedActive?'Balanced Formula-Coverage':'Formula Murni'} • ${r.signal.label}</span>
-      <h3>6 Digit Formula</h3>${digitCards(r.finalDigits)}
-      <div class="five-strong-box"><small>5 Digit Terkuat</small>${digitCards(r.strongFive,'strong-five')}</div>
-      <div class="twin-portfolio ${r.twinPortfolio.state==='ABSTAIN'?'is-abstain':(r.twinPortfolio.state==='OPSIONAL'?'is-optional':'is-strong')}">
-        <div class="twin-portfolio-head"><div><small>Twin Occurrence Gate • ${r.twinPortfolio.state}</small><b>4 Digit Twin Pool</b></div><span>${r.twinPortfolio.state}</span></div>
-        ${digitCards(r.twinPortfolio.digits,'twin-pool-digit')}
-        <div class="twin-choice-title">2 Pilihan Kembar Bersyarat</div>${twinChoiceCards(r.twinPortfolio.choices)}
-        <p><b>${r.twinPortfolio.context}.</b> Twin Pool terpisah dari keputusan occurrence: ranking memakai formula, posisi, konsensus profil, dan coverage; prior bentuk kembar maksimum 4%. Saat gate ABSTAIN, kedua pasangan hanya bahan audit dan bukan panggilan kembar.</p>
-        <div class="twin-gate-metrics"><span>Target-day ${r.twinPortfolio.samples}</span><span>Repeat ${(100*r.twinPortfolio.repeatRate).toFixed(0)}%</span><span>Recent ${(100*r.twinPortfolio.recentRate).toFixed(0)}%</span><span>Wilson low ${(100*r.twinPortfolio.wilsonLow).toFixed(0)}%</span><span>Sinyal ${(100*r.twinPortfolio.signalValue).toFixed(0)}%</span><span>Profil ${(100*r.twinPortfolio.agreement).toFixed(0)}%</span></div>
-        <div class="twin-audit"><span>Strict replay: ${twinText}</span><span>Structural reserve: ${twinReserveText}</span></div>
-      </div>
-      <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking. Twin Portfolio membaca semua profil sebelum output.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dan pilihan kembar tidak memaksa swap atau repeat.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
+    <div class="result-hero formula-ladder-card">
+      <span class="mini-title">Formula Relationship Scan • ${r.market||'-'} → ${r.targetDay}</span>
+      <h3>Tangga Prediksi Bersarang</h3>
+      <div class="ladder-step ladder-six"><div><small>6 Digit Formula</small><b>15 kombinasi 4D</b></div>${digitCards(r.finalDigits,'ladder-six-digit')}</div>
+      <div class="ladder-flow">Disaring oleh kekuatan relasi rumus</div>
+      <div class="ladder-step ladder-five"><div><small>5 Digit Terkuat</small><b>5 kombinasi 4D</b></div>${digitCards(r.strongFive,'strong-five')}</div>
+      <div class="ladder-flow">Diambil inti paling konsisten</div>
+      <div class="ladder-step ladder-four"><div><small>4 Digit Inti Sangat Kuat</small><b>1 kombinasi inti</b></div>${digitCards(r.strongFour,'core-four-digit')}</div>
+      <div class="core-twin-box"><div><small>2 Pilihan Kembar dari 4D Inti</small><b>Penjagaan formula</b></div>${twinChoiceCards(r.twinPortfolio.choices)}<p>Kembar tidak mengambil digit di luar empat digit inti dan tidak menyatakan bahwa repeat pasti terjadi.</p></div>
     </div>
-    <div class="ecology-card"><div class="backup-head"><div><small>Local Formula Ecology</small><b>${r.balancedActive?'Balanced Formula-Coverage':r.profile.label}</b></div><span class="backup-risk">${r.balancedActive?'Konflik horizon':(ps.decisive?'Lolos integrity gate':'Baseline dipertahankan')}</span></div><div class="profile-chips">${scoreRows}</div><p>${r.balancedActive?`Formula core ${r.balancedPortfolio.formulaCore.join(' ')} • coverage anchor ${r.balancedPortfolio.coverageAnchors.join(' ')} • kesepakatan profil ${(100*r.profileAgreement).toFixed(0)}%.`:`Profil berubah hanya bila unggul, akurasi posisi tidak runtuh, dan short-window mempunyai sampel cukup. Margin best ${(100*ps.margin).toFixed(1)} poin.`}</p></div>
-    <div class="reserve-card"><div><small>2 Digit Divergence Reserve • ${reserveState}</small><b>${reserveText||'—'}</b></div><p>Satu digit berasal dari keluarga ortogonal dan satu dari konsensus posisi lemah lintas profil. Reserve tidak mengubah 6D, AK, LE, carry cap, atau kembar.</p><div class="recovery-stats"><span>Kesepakatan profil ${(100*r.divergenceReserve.agreement).toFixed(0)}%</span><span>Ortogonal ${r.divergenceReserve.orthogonal??'-'}</span><span>Weak-position ${r.divergenceReserve.weak??'-'}</span></div></div>
-    <div class="backup-card"><div class="backup-head"><div><small>Formula Cadangan Ortogonal</small><b>5 Digit Sekunder</b></div><span class="backup-risk">Bukan recovery paksa</span></div>${digitCards(r.secondary.digits,'backup-digit')}<p>Runner-up keluarga formula; tidak dilatih memakai aktual dan tidak menjanjikan minimal tiga digit.</p></div>
-    <div class="stats">
-      <div class="stat"><small>Market</small><b>${r.market||'-'}</b></div><div class="stat"><small>Data</small><b>${r.rows.length}</b></div>
-      <div class="stat"><small>Latest</small><b>${r.latest.digits.join('')}</b></div><div class="stat"><small>Target</small><b>${r.targetDay}</b></div>
-      <div class="stat"><small>Replay hari</small><b>${r.sameDaySamples}</b></div><div class="stat"><small>Carry cap</small><b>${r.carry.cap}</b></div>
-    </div>
-    <div class="akle-section"><h4>AKLE Position-First</h4><div class="akle-grid"><div><small>5 Pilihan AK</small>${pairCards(r.ak,'ak')}</div><div><small>5 Pilihan LE</small>${pairCards(r.le,'le')}</div></div></div>
-    <div class="audit-columns">
-      <div><b>Gate formula</b><p class="tagline">ACTIVE ${r.activeFormulas.length} • TIE ${r.tieFormulas.length} • ${r.fallback?'fallback global':'same-day replay'} • ecology ${(100*r.signal.ecology).toFixed(0)}%</p></div>
-      <div><b>Posisi A</b><p class="tagline">${topFormula(0)}</p></div><div><b>Posisi K</b><p class="tagline">${topFormula(1)}</p></div>
-      <div><b>Posisi L</b><p class="tagline">${topFormula(2)}</p></div><div><b>Posisi E</b><p class="tagline">${topFormula(3)}</p></div>
-      <div><b>Carry audit</b><p class="tagline">Expected ${r.carry.expected.toFixed(2)} • cap maksimum ${r.carry.cap} • role ${r.carry.role.map((x,i)=>`${POS[i]} ${(100*x).toFixed(0)}%`).join(' | ')}</p></div>
-      <div><b>Integrity gate</b><p class="tagline">Best ${ps.best.profile.label}: posisi ${(100*ps.best.position).toFixed(1)}% • floor ${(100*ps.positionFloor).toFixed(1)}% • ${ps.positionIntegrity?'position OK':'position gagal'} • ${ps.shortWindowIntegrity?'window OK':'window terlalu rapuh'}.</p></div><div><b>Anti-overfit</b><p class="tagline">Tidak ada kondisi nama market, digit aktual, atau rescue pasca-ranking. Balanced mode adalah satu portfolio pra-output dari konsensus formula dan coverage historis.</p></div>
-    </div>`;
+    <div class="backup-card hedge-card"><div class="backup-head"><div><small>Pagar Formula Ortogonal</small><b>5 Digit Cadangan</b></div><span class="backup-risk">2 jembatan + 3 alternatif</span></div>${digitCards(r.secondary.digits,'backup-digit')}<div class="hedge-map"><span>Jembatan dari 5D: ${r.secondary.bridge.join(' ')}</span><span>Alternatif formula: ${r.secondary.alternatives.join(' ')}</span></div><p>Bukan kebalikan penuh dari lima digit terkuat. Dua digit menjaga hubungan dengan formula utama, sedangkan tiga digit membaca keluarga rumus runner-up.</p></div>
+    <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga secara otomatis. Tidak ada persentase peluang digit, kondisi nama market, atau penanaman hasil aktual.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,selectLocalProfile,buildBalancedEcologyPortfolio,buildTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildFormulaEvidenceLadder,buildFormulaHedge,buildTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
