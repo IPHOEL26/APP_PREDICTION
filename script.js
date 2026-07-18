@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.7 • Independent Relation Lattice';
+const APP_VERSION = 'IPHOEL Formula Engine V13.7.1 • Breadth Bridge + Honest Twin Shape';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -23,7 +23,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Independent Relation Lattice';
+  $('modelPill').textContent='Breadth-Bridge Formula Ladder';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -316,8 +316,13 @@ function buildFormulaEvidenceLadder(profileRuns){
     });
     return {digit,activeProfiles:profiles.size,activePositions:positions.size,activeFamilies:activeFamilies.size,activeRules:activeRules.size,tieFamilies:tieFamilies.size,topThreePlacements,rankPoints};
   }).sort(compareFormulaEvidence);
-  const six=evidence.slice(0,6).map(x=>x.digit),positionLedger=buildPositionFormulaLedger(profileRuns),four=choosePositionCore(six,positionLedger),remaining=six.filter(d=>!four.includes(d)),five=[...four,remaining[0]];
-  return {six,five,four,evidence,positionLedger,mode:'position-coverage',modeLabel:'Position-Coverage Route',routeNote:'Ledger posisi memiliki keragaman keluarga yang cukup; tangga memakai anchor unik A–K–L–E di dalam bukti formula utama.'};
+  const initialSix=evidence.slice(0,6).map(x=>x.digit),positionLedger=buildPositionFormulaLedger(profileRuns),four=choosePositionCore(initialSix,positionLedger);
+  const outside=evidence.filter(x=>!four.includes(x.digit)),defaultFifth=outside[0],breadthCandidate=outside.find(x=>x.activeProfiles>=3&&x.activePositions>=3),positionBridge=breadthCandidate||defaultFifth;
+  const five=[...four,positionBridge.digit],six=five.slice();
+  evidence.forEach(row=>{if(six.length<6&&!six.includes(row.digit))six.push(row.digit);});
+  const positionBridgeApplied=Boolean(breadthCandidate&&breadthCandidate.digit!==defaultFifth.digit);
+  const routeNote=positionBridgeApplied?'Ledger posisi cukup beragam, tetapi kandidat batas memiliki jangkauan sekurangnya tiga posisi. Digit breadth tersebut mengisi kursi kelima tanpa mengubah 4D atau ranking kembar.':'Ledger posisi memiliki keragaman keluarga yang cukup; tangga memakai anchor unik A–K–L–E di dalam bukti formula utama.';
+  return {six,five,four,evidence,positionLedger,initialSix,positionBridge:{digit:positionBridge.digit,activeProfiles:positionBridge.activeProfiles,activePositions:positionBridge.activePositions},positionBridgeApplied,mode:'position-coverage',modeLabel:positionBridgeApplied?'Position-Breadth Bridge':'Position-Coverage Route',routeNote};
 }
 function formulaSetMembershipStats(transitions,formula){
   const hitIndexes=[],n=transitions.length,cut=Math.floor(n/2);
@@ -368,7 +373,28 @@ function needsIndependentRelationRoute(positionLadder){
 function compareHedgeEvidence(a,b){
   return b.tieProfiles-a.tieProfiles||b.tiePositions-a.tiePositions||b.tieFamilies-a.tieFamilies||b.tieRules-a.tieRules||b.runnerPlacements-a.runnerPlacements||b.runnerPoints-a.runnerPoints||a.digit-b.digit;
 }
-function buildFormulaHedge(profileRuns,strongFive,positionLedger){
+function buildWeakPositionTieSeat(profileRuns,strongFive){
+  const primary=new Set(strongFive),candidates=[];
+  DIGITS.forEach(digit=>{
+    if(primary.has(digit))return;
+    for(let p=0;p<4;p++){
+      const tieFamilies=new Set(),tieRules=new Set(),activeFamilies=new Set(),activeRules=new Set(),tieProfiles=new Set();
+      profileRuns.forEach(run=>{
+        let profileTie=false;
+        run.model.byPosition[p].forEach(formula=>{
+          if(formula.digit!==digit)return;
+          if(formula.status==='TIE'){profileTie=true;tieFamilies.add(formula.family);tieRules.add(formula.id);}
+          else if(formula.status==='ACTIVE'){activeFamilies.add(formula.family);activeRules.add(formula.id);}
+        });
+        if(profileTie)tieProfiles.add(run.profile.id);
+      });
+      if(tieFamilies.size>=2&&activeFamilies.size>=1)candidates.push({digit,position:p,positionLabel:POS[p],tieFamilies:tieFamilies.size,tieRules:tieRules.size,tieProfiles:tieProfiles.size,activeFamilies:activeFamilies.size,activeRules:activeRules.size});
+    }
+  });
+  candidates.sort((a,b)=>b.tieFamilies-a.tieFamilies||b.tieRules-a.tieRules||b.tieProfiles-a.tieProfiles||a.activeFamilies-b.activeFamilies||a.digit-b.digit||a.position-b.position);
+  return candidates[0]||null;
+}
+function buildFormulaHedge(profileRuns,strongFive,positionLedger,options={}){
   const primary=new Set(strongFive),evidence=DIGITS.map(digit=>{
     const profiles=new Set(),positions=new Set(),families=new Set(),rules=new Set();let runnerPlacements=0,runnerPoints=0;
     profileRuns.forEach(run=>{
@@ -384,15 +410,17 @@ function buildFormulaHedge(profileRuns,strongFive,positionLedger){
   });
   const bridge=evidence.filter(x=>primary.has(x.digit)).sort(compareHedgeEvidence).slice(0,2);
   const positionalAlternatives=DIGITS.filter(d=>!primary.has(d)).map(digit=>positionLedger.ranks.map(rows=>rows.find(x=>x.digit===digit)).sort(comparePositionEvidence)[0]).sort(comparePositionEvidence);
-  const alternatives=positionalAlternatives.slice(0,3).map(x=>evidence.find(row=>row.digit===x.digit));
+  const weakTieSeat=options.enableWeakTieSeat?buildWeakPositionTieSeat(profileRuns,strongFive):null,alternativeDigits=[];
+  [weakTieSeat?.digit,...positionalAlternatives.map(x=>x.digit)].forEach(digit=>{if(Number.isInteger(digit)&&!primary.has(digit)&&!alternativeDigits.includes(digit)&&alternativeDigits.length<3)alternativeDigits.push(digit);});
+  const alternatives=alternativeDigits.map(digit=>evidence.find(row=>row.digit===digit));
   const selected=[...bridge,...alternatives].sort(compareHedgeEvidence);
-  return {digits:selected.map(x=>x.digit),bridge:bridge.map(x=>x.digit),alternatives:alternatives.map(x=>x.digit),evidence:evidence.sort(compareHedgeEvidence)};
+  return {digits:selected.map(x=>x.digit),bridge:bridge.map(x=>x.digit),alternatives:alternatives.map(x=>x.digit),weakTieSeat,evidence:evidence.sort(compareHedgeEvidence)};
 }
 function buildPrediction(inputRows){
   const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),profileRuns=LOCAL_PROFILES.map(p=>buildFormulaRelationRun(rows,p));
   const selectedCore=profileRuns.find(r=>r.profile.id==='formula-first')||profileRuns[0];
   const positionLadder=buildFormulaEvidenceLadder(profileRuns),independentLattice=buildIndependentRelationLattice(profileRuns,positionLadder),useIndependent=needsIndependentRelationRoute(positionLadder);
-  const formulaLadder=useIndependent?independentLattice:positionLadder,secondary=buildFormulaHedge(profileRuns,formulaLadder.five,positionLadder.positionLedger),ak=buildPairs(selectedCore.posRank[0],selectedCore.posRank[1]),le=buildPairs(selectedCore.posRank[2],selectedCore.posRank[3]);
+  const formulaLadder=useIndependent?independentLattice:positionLadder,secondary=buildFormulaHedge(profileRuns,formulaLadder.five,positionLadder.positionLedger,{enableWeakTieSeat:!useIndependent&&positionLadder.positionBridgeApplied}),ak=buildPairs(selectedCore.posRank[0],selectedCore.posRank[1]),le=buildPairs(selectedCore.posRank[2],selectedCore.posRank[3]);
   const core={...selectedCore,finalDigits:formulaLadder.six,strongFive:formulaLadder.five,strongFour:formulaLadder.four,secondary,formulaLadder,ak,le};
   const twinPortfolio=useIndependent?buildIndependentTwinPortfolio(core):buildTwinPortfolio(core,profileRuns);
   return {...core,twinPortfolio,profileRuns,positionLadder,independentLattice,useIndependent};
@@ -519,7 +547,7 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
-function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • relasi ${x.bestShape.label}</small><b>${x.pair}</b><span>${x.relationNote||'Diambil langsung dari 4D inti'}</span></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • digit formula</small><b>${x.pair}</b><span>Bentuk posisi kandidat ${x.bestShape.label} • belum mengunci posisi</span></div>`).join('')}</div>`;}
 function renderResult(r){
   $('output').className='result';
   if($('modelPill'))$('modelPill').textContent=r.formulaLadder.modeLabel;
@@ -533,11 +561,11 @@ function renderResult(r){
       <div class="ladder-step ladder-five"><div><small>5 Digit Terkuat</small><b>5 kombinasi 4D</b></div>${digitCards(r.strongFive,'strong-five')}</div>
       <div class="ladder-flow">Diambil inti paling konsisten</div>
       <div class="ladder-step ladder-four"><div><small>4 Digit Inti Sangat Kuat</small><b>1 kombinasi inti</b></div>${digitCards(r.strongFour,'core-four-digit')}</div>
-      <div class="core-twin-box"><div><small>2 Pilihan Kembar dari 4D Inti</small><b>${r.twinPortfolio.state}</b></div>${twinChoiceCards(r.twinPortfolio.choices)}<p>Kembar tidak mengambil digit di luar empat digit inti dan tidak menyatakan bahwa repeat pasti terjadi.</p></div>
+      <div class="core-twin-box"><div><small>2 Pilihan Kembar dari 4D Inti</small><b>${r.twinPortfolio.state}</b></div>${twinChoiceCards(r.twinPortfolio.choices)}<p>Ketepatan digit kembar dan ketepatan posisi dinilai terpisah. Kembar tidak mengambil digit di luar empat digit inti dan tidak menyatakan bahwa repeat pasti terjadi.</p></div>
     </div>
-    <div class="backup-card hedge-card"><div class="backup-head"><div><small>Pagar Formula Ortogonal</small><b>5 Digit Cadangan</b></div><span class="backup-risk">2 jembatan + 3 alternatif</span></div>${digitCards(r.secondary.digits,'backup-digit')}<div class="hedge-map"><span>Jembatan dari 5D: ${r.secondary.bridge.join(' ')}</span><span>Alternatif formula: ${r.secondary.alternatives.join(' ')}</span></div><p>Bukan kebalikan penuh dari lima digit terkuat. Dua digit menjaga hubungan dengan formula utama, sedangkan tiga digit membaca keluarga rumus runner-up.</p></div>
+    <div class="backup-card hedge-card"><div class="backup-head"><div><small>Pagar Formula Ortogonal</small><b>5 Digit Cadangan</b></div><span class="backup-risk">2 jembatan + 3 alternatif</span></div>${digitCards(r.secondary.digits,'backup-digit')}<div class="hedge-map"><span>Jembatan dari 5D: ${r.secondary.bridge.join(' ')}</span><span>Alternatif formula: ${r.secondary.alternatives.join(' ')}</span>${r.secondary.weakTieSeat?`<span class="weak-tie-seat">TIE posisi lemah: ${r.secondary.weakTieSeat.digit} (${r.secondary.weakTieSeat.positionLabel})</span>`:''}</div><p>Bukan kebalikan penuh dari lima digit terkuat. Dua digit menjaga hubungan utama; tiga alternatif membaca runner-up dan, saat breadth bridge aktif, satu kursi TIE yang masih terhubung dengan formula aktif.</p></div>
     <div class="akle-section relation-pairs"><h4>AKLE Position-First</h4><div class="akle-grid"><div><small>5 Pilihan AK</small>${pairCards(r.ak,'ak')}</div><div><small>5 Pilihan LE</small>${pairCards(r.le,'le')}</div></div></div>
     <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga otomatis. Suara profil yang mengulang rumus sama tidak dianggap sebagai keluarga baru. Tidak ada persentase peluang digit, kondisi nama market, atau penanaman hasil aktual.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,needsIndependentRelationRoute,buildFormulaHedge,buildTwinPortfolio,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,needsIndependentRelationRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildTwinPortfolio,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};

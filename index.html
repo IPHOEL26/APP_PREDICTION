@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IPHOEL PREDICTION</title>
-  <link rel="stylesheet" href="style.css?v=13.7.0" />
+  <link rel="stylesheet" href="style.css?v=13.7.1" />
 </head>
 <body>
   <div class="app-shell">
@@ -13,7 +13,7 @@
       <div class="version-pill" id="versionPill">Formula Engine</div>
     </header>
     <section class="notice">
-      <b>Independent Relation Lattice:</b> mesin lebih dulu memeriksa apakah beberapa profil hanya mengulang keluarga rumus yang sama. Jika iya, suara duplikat diputus dan 4D inti dibangun dari anchor replay serta echo keluarga independen. Jika breadth posisi cukup, jalur A–K–L–E tetap dipakai. Dua pilihan kembar selalu berasal dari 4D dan dibaca ulang lewat repeat-family—tanpa persentase peluang atau penanaman aktual.
+      <b>Breadth-Bridge Formula Ladder:</b> mesin memutus suara profil yang hanya mengulang rumus sama. Pada jalur posisi, kandidat batas yang menjangkau sekurangnya tiga posisi dapat mengisi kursi kelima tanpa mengubah 4D. Saat jembatan ini aktif, cadangan memperoleh satu kursi TIE yang masih terhubung dengan formula aktif. Digit kembar dan bentuk posisinya dinilai terpisah—tanpa persentase peluang atau penanaman aktual.
     </section>
     <main class="layout">
       <section class="panel input-panel">
@@ -30,11 +30,11 @@
         <div class="single-action"><button class="btn danger" id="btnClear">Reset / Bersihkan</button></div>
       </section>
       <section class="panel output-panel">
-        <div class="panel-head"><div><span class="mini-title">Output Formula</span><h2>Hasil Pembacaan</h2></div><span class="pill" id="modelPill">Independent Relation Lattice</span></div>
+        <div class="panel-head"><div><span class="mini-title">Output Formula</span><h2>Hasil Pembacaan</h2></div><span class="pill" id="modelPill">Breadth-Bridge Formula Ladder</span></div>
         <div id="output" class="empty-state"><div><div class="empty-icon">Φ</div><h3>Belum ada data</h3><p>Tempel data historis. Analisis berjalan otomatis.</p></div></div>
       </section>
     </main>
   </div>
-  <script src="script.js?v=13.7.0"></script>
+  <script src="script.js?v=13.7.1"></script>
 </body>
 </html>
