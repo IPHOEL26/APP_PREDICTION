@@ -1,8 +1,9 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.3 • Twin Integrity + Structural Twin Reserve';
+const APP_VERSION = 'IPHOEL Formula Engine V13.4 • Formula-First Twin Portfolio';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
+const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
 const DAYS = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'];
 const MONTHS = {jan:1,january:1,januari:1,feb:2,february:2,februari:2,mar:3,march:3,maret:3,apr:4,april:4,may:5,mei:5,jun:6,june:6,juni:6,jul:7,july:7,juli:7,aug:8,august:8,agt:8,agustus:8,sep:9,sept:9,september:9,oct:10,okt:10,october:10,oktober:10,nov:11,november:11,dec:12,des:12,december:12,desember:12};
 const $ = id => typeof document === 'undefined' ? null : document.getElementById(id);
@@ -37,7 +38,7 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Menguji integritas profil dan konflik horizon','Menyusun formula-coverage portfolio, AK/LE, dan repeat'];
+  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay empat profil formula lokal','Menguji integritas profil dan konflik horizon','Menyusun 4 Digit Twin Pool dan dua pilihan formula'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
@@ -261,23 +262,25 @@ function buildPrediction(inputRows){
   const balancedActive=conflict&&(selection.rejected||bestPositionWeak||selectedCore.profile.window<5||agreement<.70);
   const twinVotes={};profileRuns.forEach(run=>{if(run.twin){const k=`${run.twin.digit}|${run.twin.shape}`;twinVotes[k]=(twinVotes[k]||0)+1;}});
   const agreedTwin=Object.entries(twinVotes).sort((a,b)=>b[1]-a[1])[0];
-  const twin=balancedActive&&(!agreedTwin||agreedTwin[1]<3)?null:selectedCore.twin;
+  const votedTwin=agreedTwin?profileRuns.map(run=>run.twin).find(x=>x&&`${x.digit}|${x.shape}`===agreedTwin[0]):null;
+  const twin=balancedActive?(agreedTwin&&agreedTwin[1]>=3?{...votedTwin,profileVotes:agreedTwin[1]}:null):selectedCore.twin;
   const core=balancedActive?{...selectedCore,finalDigits:balanced.digits,strongFive:balanced.strong,twin}:selectedCore;
   const twinReserve=chooseStructuralTwinReserve(core.transitions,core.model,core.strongFive,core.overall,core.twin);
+  const twinPortfolio=buildTwinPortfolio(core,profileRuns,selection,twinReserve);
   const reserve=buildDivergenceReserve(core,profileRuns,selection);
   const ecologyMode=balancedActive?'BALANCED':'PROFILE';
   const signalPenalty=balancedActive?.18:0;
   const signal={...core.signal,value:Math.max(0,core.signal.value-signalPenalty)};
   signal.label=signal.value>=.70?'MENENGAH':signal.value>=.52?'RENDAH–MENENGAH':'RENDAH';
-  return {...core,twinReserve,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
+  return {...core,twinReserve,twinPortfolio,signal,profileSelection:selection,profileRuns,divergenceReserve:reserve,profileAgreement:agreement,balancedPortfolio:balanced,balancedActive,ecologyMode};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
   const seen=new Set();return out.sort((a,b)=>b.score-a.score||a.pair.localeCompare(b.pair)).filter(x=>{if(seen.has(x.pair))return false;seen.add(x.pair);return true;}).slice(0,5);
 }
 function chooseTwin(transitions,posRank,model,latest){
-  const shapes=[[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];const candidates=[];
-  shapes.forEach(([p,q,label])=>{
+  const candidates=[];
+  TWIN_SHAPES.forEach(([p,q,label])=>{
     const same=transitions.filter(tr=>tr.target.digits[p]===tr.target.digits[q]),rate=same.length/Math.max(1,transitions.length);if(same.length<2||rate<.22)return;
     const topP=new Set(posRank[p].slice(0,2).map(x=>x.digit)),topQ=new Set(posRank[q].slice(0,2).map(x=>x.digit));
     DIGITS.forEach(d=>{if(!topP.has(d)||!topQ.has(d))return;const digitHits=same.filter(tr=>tr.target.digits[p]===d).length;const families=Object.keys(model.familyContrib[p][d]).length+Object.keys(model.familyContrib[q][d]).length;if(digitHits<1||families<3)return;const score=rate+.15*digitHits+.04*families;candidates.push({digit:d,shape:label,score,rate,occurrences:same.length,digitHits});});
@@ -309,6 +312,47 @@ function chooseStructuralTwinReserve(transitions,model,strongFive,overall,strict
   if(strictTwin&&strictTwin.digit===leader.digit)return null;
   return {...leader,repeatRate,repeatEvents:repeatEvents.length,label:'Structural breadth reserve'};
 }
+
+function buildTwinPortfolio(core,profileRuns,profileSelection,twinReserve){
+  const runs=profileRuns?.length?profileRuns:[core],weightByProfile={};
+  (profileSelection?.results||[]).forEach(x=>weightByProfile[x.profile.id]=Math.max(.05,x.score));
+  const history=core.transitions||[],n=history.length,repeatEvents=history.filter(tr=>new Set(tr.target.digits).size<4),repeatRate=repeatEvents.length/Math.max(1,n);
+  const shapeHistory=TWIN_SHAPES.map(([p,q,label])=>{
+    const same=history.filter(tr=>tr.target.digits[p]===tr.target.digits[q]),digitHits=Array(10).fill(0);
+    same.forEach(tr=>digitHits[tr.target.digits[p]]++);
+    return {p,q,label,events:same.length,rate:same.length/Math.max(1,n),posterior:(same.length+1)/(n+4),digitHits};
+  });
+  const candidates=DIGITS.map(digit=>{
+    const positionEvidence=Array(4).fill(0);let overallEvidence=0,familyEvidence=0,profileSupport=0,weightSum=0,supportingProfiles=0;
+    runs.forEach(run=>{
+      const w=weightByProfile[run.profile.id]||.5;weightSum+=w;
+      const localPosition=run.model.score.map(a=>(a[digit]||0)/Math.max(.0001,...a));
+      localPosition.forEach((x,p)=>positionEvidence[p]+=w*x);
+      overallEvidence+=w*((run.overall[digit]||0)/Math.max(.0001,...run.overall));
+      const familyBreadth=run.model.familyContrib.reduce((z,p)=>z+Object.keys(p[digit]).length,0);
+      familyEvidence+=w*Math.min(1,familyBreadth/12);
+      const supported=localPosition.filter(x=>x>=.55).length>=2||run.posRank.filter(r=>r.slice(0,3).some(x=>x.digit===digit)).length>=2;
+      if(supported){profileSupport+=w;supportingProfiles++;}
+    });
+    for(let p=0;p<4;p++)positionEvidence[p]/=Math.max(.0001,weightSum);
+    overallEvidence/=Math.max(.0001,weightSum);familyEvidence/=Math.max(.0001,weightSum);profileSupport/=Math.max(.0001,weightSum);
+    const shapes=shapeHistory.map(sh=>{
+      const pairFormula=Math.sqrt(positionEvidence[sh.p]*positionEvidence[sh.q]);
+      const digitPrior=sh.events?(sh.digitHits[digit]+.5)/(sh.events+5):0;
+      const historyContext=.68*sh.posterior+.32*digitPrior;
+      const score=.64*pairFormula+.16*overallEvidence+.10*familyEvidence+.06*profileSupport+.04*historyContext;
+      return {...sh,pairFormula,historyContext,score};
+    }).sort((a,b)=>b.score-a.score||b.pairFormula-a.pairFormula||a.label.localeCompare(b.label));
+    const bestShape=shapes[0],strictMatch=core.twin?.digit===digit,structuralMatch=twinReserve?.digit===digit;
+    const auditBonus=(strictMatch ? .012 : 0)+(structuralMatch ? .006 : 0);
+    return {digit,score:bestShape.score+auditBonus,formulaIndex:bestShape.pairFormula,overallEvidence,familyEvidence,profileSupport,supportingProfiles,bestShape,strictMatch,structuralMatch};
+  }).sort((a,b)=>b.score-a.score||b.formulaIndex-a.formulaIndex||b.profileSupport-a.profileSupport||a.digit-b.digit);
+  const pool=candidates.slice(0,4),choices=pool.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1}));
+  const formulaStrength=mean(choices.map(x=>x.formulaIndex)),repeatPosterior=(repeatEvents.length+2)/(n+5);
+  const state=n>=6&&repeatRate>=.40&&formulaStrength>=.34?'DUKUNGAN KUAT':formulaStrength>=.24?'OPSIONAL':'AUDIT';
+  const context=repeatRate>=.40?'Repeat historis teramati':'Repeat historis tidak dominan';
+  return {pool,choices,digits:pool.map(x=>x.digit),candidates,repeatEvents:repeatEvents.length,repeatRate,repeatPosterior,formulaStrength,state,context,samples:n};
+}
 function buildOrthogonalSecondary(model,overall,strongFive,finalDigits){
   const primary=new Set(strongFive),scores=Array(10).fill(0),reasons=Array.from({length:10},()=>[]);
   for(let p=0;p<4;p++)for(let d=0;d<10;d++){
@@ -328,6 +372,7 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan ${x.choice} • ${x.bestShape.label}</small><b>${x.pair}</b><span>Indeks formula ${Math.round(100*x.formulaIndex)}/100 • dukungan ${x.supportingProfiles}/${LOCAL_PROFILES.length} profil</span></div>`).join('')}</div>`;}
 function renderResult(r){
   const topFormula=p=>r.model.byPosition[p].filter(x=>x.status!=='BLOCKED').slice(0,5).map(x=>`${x.label}→${x.digit} (${x.hits}/${x.trials}, ${x.status})`).join('<br>')||'Tidak ada formula lolos';
   const twinText=r.twin?`${r.twin.digit}${r.twin.digit} • ${r.twin.shape}`:'Tidak ada kembar utama yang lolos gate';
@@ -341,9 +386,14 @@ function renderResult(r){
       <span class="mini-title">${r.balancedActive?'Balanced Formula-Coverage':'Formula Murni'} • ${r.signal.label}</span>
       <h3>6 Digit Formula</h3>${digitCards(r.finalDigits)}
       <div class="five-strong-box"><small>5 Digit Terkuat</small>${digitCards(r.strongFive,'strong-five')}</div>
-      <div class="twin-box"><small>Kembar utama • strict replay</small><b>${twinText}</b></div>
-      <div class="twin-box twin-reserve-box"><small>Kembar struktural • cadangan</small><b>${twinReserveText}</b>${r.twinReserve?`<span>Repeat target ${(100*r.twinReserve.repeatRate).toFixed(0)}% • ACTIVE ${r.twinReserve.active} di ${r.twinReserve.activePositions} posisi</span>`:''}</div>
-      <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking. Kembar struktural tetap terpisah dari kembar utama.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dipisahkan dan tidak memaksa swap.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
+      <div class="twin-portfolio">
+        <div class="twin-portfolio-head"><div><small>Formula-First Twin Portfolio</small><b>4 Digit Twin Pool</b></div><span>${r.twinPortfolio.state}</span></div>
+        ${digitCards(r.twinPortfolio.digits,'twin-pool-digit')}
+        <div class="twin-choice-title">2 Pilihan Kembar</div>${twinChoiceCards(r.twinPortfolio.choices)}
+        <p>${r.twinPortfolio.context} ${(100*r.twinPortfolio.repeatRate).toFixed(0)}% (${r.twinPortfolio.repeatEvents}/${r.twinPortfolio.samples} transisi). Ranking memakai formula, posisi, konsensus profil, dan coverage sebagai bukti utama; prior bentuk kembar dibatasi maksimum 4%. Dua pilihan adalah kandidat bila repeat terjadi—bukan perintah bahwa hasil berikutnya harus kembar.</p>
+        <div class="twin-audit"><span>Strict replay: ${twinText}</span><span>Structural reserve: ${twinReserveText}</span></div>
+      </div>
+      <p class="tagline">${r.balancedActive?'Profil lokal berkonflik: enam digit dibentuk sekali dari 3 konsensus formula lintas-horizon + 3 anchor coverage target-day; tidak ada rescue setelah ranking. Twin Portfolio membaca semua profil sebelum output.':(low?'Sinyal formula rendah: hasil dibaca sebagai audit; reserve dan pilihan kembar tidak memaksa swap atau repeat.':'Hasil dibentuk dari profil lokal yang lolos walk-forward tanpa kondisi nama market.')}</p>
     </div>
     <div class="ecology-card"><div class="backup-head"><div><small>Local Formula Ecology</small><b>${r.balancedActive?'Balanced Formula-Coverage':r.profile.label}</b></div><span class="backup-risk">${r.balancedActive?'Konflik horizon':(ps.decisive?'Lolos integrity gate':'Baseline dipertahankan')}</span></div><div class="profile-chips">${scoreRows}</div><p>${r.balancedActive?`Formula core ${r.balancedPortfolio.formulaCore.join(' ')} • coverage anchor ${r.balancedPortfolio.coverageAnchors.join(' ')} • kesepakatan profil ${(100*r.profileAgreement).toFixed(0)}%.`:`Profil berubah hanya bila unggul, akurasi posisi tidak runtuh, dan short-window mempunyai sampel cukup. Margin best ${(100*ps.margin).toFixed(1)} poin.`}</p></div>
     <div class="reserve-card"><div><small>2 Digit Divergence Reserve • ${reserveState}</small><b>${reserveText||'—'}</b></div><p>Satu digit berasal dari keluarga ortogonal dan satu dari konsensus posisi lemah lintas profil. Reserve tidak mengubah 6D, AK, LE, carry cap, atau kembar.</p><div class="recovery-stats"><span>Kesepakatan profil ${(100*r.divergenceReserve.agreement).toFixed(0)}%</span><span>Ortogonal ${r.divergenceReserve.orthogonal??'-'}</span><span>Weak-position ${r.divergenceReserve.weak??'-'}</span></div></div>
@@ -363,4 +413,4 @@ function renderResult(r){
     </div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,selectLocalProfile,buildBalancedEcologyPortfolio,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,selectLocalProfile,buildBalancedEcologyPortfolio,buildTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,LOCAL_PROFILES};
