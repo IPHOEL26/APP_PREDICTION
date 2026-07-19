@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.10 • Dual-Horizon Target-Day Bridge';
+const APP_VERSION = 'IPHOEL Formula Engine V13.11 • Structural Target-Day Core Bridge';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -431,7 +431,32 @@ function buildTargetDayRecurrenceBridge(rows,targetDay,formulaLadder,positionLad
   remaining.sort((a,b)=>(target.get(b)?.activeFamilies||0)-(target.get(a)?.activeFamilies||0)||(target.get(a)?.rank||99)-(target.get(b)?.rank||99)||(cross.get(a)?.rank||99)-(cross.get(b)?.rank||99));
   const five=[...four,remaining[0]],sixth=formulaLadder.six.filter(digit=>!five.includes(digit)).sort((a,b)=>(cross.get(a)?.rank||99)-(cross.get(b)?.rank||99)||a-b)[0],six=[...five,sixth];
   if(new Set(six).size!==6)return null;
-  return {candidateDigit:candidate.digit,replacedDigit:victim.digit,four,five,six,targetEvidence:candidate,targetTransitions:ledger.transitions.length,latestTargetDigits:ledger.latestTarget.digits,mode:'target-day-bridge',modeLabel:'Dual-Horizon Target-Day Bridge'};
+  return {candidateDigit:candidate.digit,replacedDigit:victim.digit,four,five,six,targetEvidence:candidate,targetTransitions:ledger.transitions.length,latestTargetDigits:ledger.latestTarget.digits,bridgeKind:'position-recurrence',mode:'target-day-bridge',modeLabel:'Dual-Horizon Target-Day Bridge'};
+}
+function buildStructuralTargetDayCoreBridge(rows,targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,historyConditioned){
+  if(!routeDecision?.structural||historyConditioned)return null;
+  const ledger=buildTargetDayRecurrenceLedger(rows,targetDay);if(!ledger||ledger.transitions.length<7)return null;
+  const target=new Map(ledger.evidence.map((row,index)=>[row.digit,{...row,rank:index+1}]));
+  const independent=new Map(independentLattice.evidence.map((row,index)=>[row.digit,{...row,rank:index+1}]));
+  const position=new Map(positionLadder.evidence.map((row,index)=>[row.digit,{...row,rank:index+1}]));
+  const candidate=ledger.evidence.slice(0,2).find(row=>
+    formulaLadder.five.includes(row.digit)&&!formulaLadder.four.includes(row.digit)&&
+    row.activeFamilies>=5&&row.activeRules>=5&&
+    (independent.get(row.digit)?.activeFamilies||0)>=4&&(independent.get(row.digit)?.activeRules||0)>=4&&
+    (position.get(row.digit)?.activeProfiles||0)>=3
+  );
+  if(!candidate)return null;
+  const candidatePosition=position.get(candidate.digit)?.activeProfiles||0;
+  const victim=formulaLadder.four.map(digit=>({digit,target:target.get(digit),position:position.get(digit)})).filter(row=>
+    candidate.activeFamilies-(row.target?.activeFamilies||0)>=2&&
+    candidatePosition>(row.position?.activeProfiles||0)
+  ).sort((a,b)=>(b.target?.rank||99)-(a.target?.rank||99)||(a.target?.activeFamilies||0)-(b.target?.activeFamilies||0)||(b.position?.rank||99)-(a.position?.rank||99)||b.digit-a.digit)[0];
+  if(!victim)return null;
+  const four=formulaLadder.four.map(digit=>digit===victim.digit?candidate.digit:digit);
+  const five=[...four,...formulaLadder.five.filter(digit=>!four.includes(digit))].slice(0,5);
+  const six=[...five,...formulaLadder.six.filter(digit=>!five.includes(digit))].slice(0,6);
+  if(new Set(four).size!==4||new Set(five).size!==5||new Set(six).size!==6)return null;
+  return {candidateDigit:candidate.digit,replacedDigit:victim.digit,four,five,six,targetEvidence:candidate,targetTransitions:ledger.transitions.length,latestTargetDigits:ledger.latestTarget.digits,bridgeKind:'structural-core',twinStrategy:'repeat-depth',mode:'structural-target-day-core',modeLabel:'Structural Target-Day Core Bridge'};
 }
 function needsIndependentRelationRoute(positionLadder){
   const leaders=positionLadder.evidence.slice(0,2),families=sum(leaders.map(x=>x.activeFamilies)),rules=sum(leaders.map(x=>x.activeRules));
@@ -570,7 +595,13 @@ function buildPrediction(inputRows){
     else if(boundarySeat&&boundarySeat.digit!==formulaLadder.six[5])formulaLadder={...formulaLadder,six:[...formulaLadder.five,boundarySeat.digit],boundarySeat,routeNote:`${formulaLadder.routeNote} Pair-balance lintas empat posisi dan resurgence lokal lolos bersama untuk kursi keenam; 5D, 4D, dan kembar tidak berubah.`};
   }
   targetDayBridge=buildTargetDayRecurrenceBridge(rows,selectedCore.targetDay,formulaLadder,positionLadder,useIndependent);
-  if(targetDayBridge)formulaLadder={...formulaLadder,six:targetDayBridge.six,five:targetDayBridge.five,four:targetDayBridge.four,targetDayBridge,mode:targetDayBridge.mode,modeLabel:targetDayBridge.modeLabel,routeNote:`${formulaLadder.routeNote} Rantai ${selectedCore.targetDay}→${selectedCore.targetDay} memberi kandidat ${targetDayBridge.candidateDigit} melalui formula lintas-nilai dan recurrence posisi; kandidat menggantikan ${targetDayBridge.replacedDigit} pada inti tanpa memakai nama market.`};
+  if(!targetDayBridge&&useIndependent)targetDayBridge=buildStructuralTargetDayCoreBridge(rows,selectedCore.targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,historyConditioned);
+  if(targetDayBridge){
+    const bridgeNote=targetDayBridge.bridgeKind==='structural-core'
+      ?`Rantai ${selectedCore.targetDay}→${selectedCore.targetDay}, keluarga independen lintas-riwayat, dan breadth posisi menyepakati ${targetDayBridge.candidateDigit}; digit ${targetDayBridge.replacedDigit} turun hanya dari 4D, sedangkan himpunan 5D tetap.`
+      :`Rantai ${selectedCore.targetDay}→${selectedCore.targetDay} memberi kandidat ${targetDayBridge.candidateDigit} melalui formula lintas-nilai dan recurrence posisi; kandidat menggantikan ${targetDayBridge.replacedDigit} pada inti tanpa memakai nama market.`;
+    formulaLadder={...formulaLadder,six:targetDayBridge.six,five:targetDayBridge.five,four:targetDayBridge.four,targetDayBridge,mode:targetDayBridge.mode,modeLabel:targetDayBridge.modeLabel,routeNote:`${formulaLadder.routeNote} ${bridgeNote}`};
+  }
   let secondary=buildFormulaHedge(profileRuns,formulaLadder.five,positionLadder.positionLedger,{enableWeakTieSeat:!useIndependent&&positionLadder.positionBridgeApplied});
   if(routeDecision.replayValidated)secondary=buildCounterRouteHedge(profileRuns,formulaLadder.six,positionLadder,secondary);
   const ak=buildPairs(selectedCore.posRank[0],selectedCore.posRank[1]),le=buildPairs(selectedCore.posRank[2],selectedCore.posRank[3]);
@@ -643,10 +674,13 @@ function buildTwinPortfolio(core,profileRuns){
   return {pool,choices,digits:coreFour,candidates,state:'PENJAGAAN FORMULA'};
 }
 function applyTargetDayTwinBridge(portfolio,targetDayBridge){
-  const promoted=portfolio.pool.find(row=>row.digit===targetDayBridge.candidateDigit),runner=portfolio.candidates.find(row=>row.digit!==targetDayBridge.candidateDigit);
+  const promoted=portfolio.pool.find(row=>row.digit===targetDayBridge.candidateDigit);
+  const runner=targetDayBridge.twinStrategy==='repeat-depth'
+    ?portfolio.candidates.filter(row=>row.digit!==targetDayBridge.candidateDigit).sort((a,b)=>b.activeHits-a.activeHits||b.activeRules-a.activeRules||b.activeFamilies-a.activeFamilies||b.targetHits-a.targetHits||a.digit-b.digit)[0]
+    :portfolio.candidates.find(row=>row.digit!==targetDayBridge.candidateDigit);
   if(!promoted||!runner)return portfolio;
-  const choices=[promoted,runner].map((row,index)=>({...row,pair:`${row.digit}${row.digit}`,choice:index+1,targetDayBridge:row.digit===targetDayBridge.candidateDigit}));
-  return {...portfolio,choices,state:'PENJAGAAN DUAL-HORIZON'};
+  const choices=[promoted,runner].map((row,index)=>({...row,pair:`${row.digit}${row.digit}`,choice:index+1,targetDayBridge:row.digit===targetDayBridge.candidateDigit,repeatDepth:targetDayBridge.twinStrategy==='repeat-depth'&&row.digit===runner.digit}));
+  return {...portfolio,choices,state:targetDayBridge.twinStrategy==='repeat-depth'?'PENJAGAAN TARGET-DAY + REPEAT-DEPTH':'PENJAGAAN DUAL-HORIZON'};
 }
 function allSequentialTransitions(rows){
   const chrono=rows.slice().reverse(),out=[];
@@ -707,7 +741,7 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
-function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • digit formula</small><b>${x.pair}</b><span>Bentuk posisi kandidat ${x.bestShape.label} • belum mengunci posisi</span></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • ${x.targetDayBridge?'anchor target-day':x.repeatDepth?'kedalaman repeat seluruh replay':'digit formula'}</small><b>${x.pair}</b><span>Bentuk posisi kandidat ${x.bestShape.label} • belum mengunci posisi</span></div>`).join('')}</div>`;}
 function renderResult(r){
   $('output').className='result';
   if($('modelPill'))$('modelPill').textContent=r.formulaLadder.modeLabel;
@@ -731,4 +765,4 @@ function renderResult(r){
     <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga otomatis. Router replay menilai jalur rumus, bukan peluang digit; nama market dan hasil yang belum masuk data tidak dipakai dalam keputusan.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,buildHistoryConditionedIndependentLadder,buildTargetDayRecurrenceLedger,buildTargetDayRecurrenceBridge,needsIndependentRelationRoute,weightedRouteReplay,chooseFormulaRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildCounterRouteHedge,buildPairBalanceBoundarySeat,promotePairBalanceCore,buildTwinPortfolio,applyTargetDayTwinBridge,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,pairBalanceFormulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,buildHistoryConditionedIndependentLadder,buildTargetDayRecurrenceLedger,buildTargetDayRecurrenceBridge,buildStructuralTargetDayCoreBridge,needsIndependentRelationRoute,weightedRouteReplay,chooseFormulaRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildCounterRouteHedge,buildPairBalanceBoundarySeat,promotePairBalanceCore,buildTwinPortfolio,applyTargetDayTwinBridge,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,pairBalanceFormulaLibrary,LOCAL_PROFILES};
