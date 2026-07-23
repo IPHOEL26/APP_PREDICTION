@@ -4,16 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IPHOEL PREDICTION</title>
-  <link rel="stylesheet" href="style.css?v=13.19" />
+  <link rel="stylesheet" href="style.css?v=13.20" />
 </head>
 <body>
   <div class="app-shell">
     <header class="hero">
       <div class="brand-row"><span class="brand-mark">∑</span><h1>IPHOEL PREDICTION</h1></div>
-      <div class="version-pill" id="versionPill">IPHOEL Formula Engine V13.19 • Target-Day Middle-Position Recovery</div>
+      <div class="version-pill" id="versionPill">IPHOEL Formula Engine V13.20 • Replay-Validated K-Coverage Guard</div>
     </header>
     <section class="notice">
-      <b>Target-Day Middle-Position Recovery:</b> ketika rute posisi menang kuat pada replay tetapi pemimpin target-day hilang dari seluruh 6D, satu anchor dapat dipulihkan hanya jika membawa keluarga ACTIVE yang dominan, recurrence target-day, dukungan independen, dan saksi TIE pada posisi K. Carry sumber yang kalah pada target-day turun dari inti tetapi tetap dijaga di 6D. Near-tie recovery, structural replay-loss recovery, retensi batas, cross-route concentration, dan bridge lama tetap bekerja pada keadaan lain. Urutan 4D ⊂ 5D ⊂ 6D tetap otomatis; nama market, persentase peluang digit, dan hasil yang belum masuk data tidak menjadi rumus.
+      <b>Replay-Validated K-Coverage Guard:</b> ketika replay tetap memenangkan rute independen tetapi irisan antarrute hanya dua digit, satu pemimpin K dari inti rute posisi dapat menjaga kursi keenam hanya jika ACTIVE pada seluruh profil, bebas TIE di K, didukung posisi ganda, dan mempunyai recurrence A–K–L–E pada target-day. 4D dan 5D tidak berubah. Target-day middle-position recovery, near-tie recovery, structural replay-loss recovery, retensi batas, cross-route concentration, dan bridge lama tetap bekerja pada keadaan lain. Urutan 4D ⊂ 5D ⊂ 6D tetap otomatis; nama market, persentase peluang digit, dan hasil yang belum masuk data tidak menjadi rumus.
     </section>
     <main class="layout">
       <section class="panel input-panel">
@@ -35,6 +35,6 @@
       </section>
     </main>
   </div>
-  <script src="script.js?v=13.19"></script>
+  <script src="script.js?v=13.20"></script>
 </body>
 </html>
