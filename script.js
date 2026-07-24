@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.23 • Near-Parity Sparse-Overlap Recovery';
+const APP_VERSION = 'IPHOEL Formula Engine V13.24 • Replay-Independent Target-Carry Twin Recovery';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -683,6 +683,33 @@ function buildReplayKCounterRouteGuard(rows,targetDay,formulaLadder,positionLadd
   const six=[...formulaLadder.five,candidate.digit];if(new Set(six).size!==6)return null;
   return {six,five:formulaLadder.five.slice(),four:formulaLadder.four.slice(),candidateDigit:candidate.digit,replacedDigit:victim.digit,candidate,victim,priorSix:formulaLadder.six.slice(),priorFive:formulaLadder.five.slice(),priorFour:formulaLadder.four.slice(),targetTransitions:ledger.transitions.length,latestTargetDigits:ledger.latestTarget.digits,mode:'replay-k-counter-route-guard',modeLabel:'Replay-Validated K-Coverage Guard'};
 }
+function buildReplayIndependentTargetCarryTwinRecovery(rows,targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,profileRuns,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage,replayKCounterRouteGuard){
+  const replay=routeDecision?.replay;
+  if(routeDecision?.cause!=='replay'||routeDecision?.structural||!routeDecision?.replayValidated||!routeDecision?.useIndependent||historyConditioned||crossRouteConcentration||targetDayBridge||nearTieTargetCoverage||replayKCounterRouteGuard||formulaLadder.mode!=='replay-independent'||!replay||replay.independent.tests<6||routeDecision.overlap!==2||replay.independent.four<replay.position.four+.20||replay.independent.score<replay.position.score+.20||replay.independent.six<replay.position.six+.20)return null;
+  const ledger=buildTargetDayRecurrenceLedger(rows,targetDay);if(!ledger||ledger.transitions.length<6)return null;
+  const latestSource=unique(rows[0]?.digits||[]),latestTarget=unique(ledger.latestTarget.digits);if(latestSource.length!==4||latestTarget.length!==4)return null;
+  const rankedMap=items=>new Map(items.map((row,index)=>[row.digit,{...row,rank:index+1}]));
+  const target=rankedMap(ledger.evidence),independent=rankedMap(independentLattice.anchors),position=rankedMap(positionLadder.evidence);
+  const hedge=rankedMap(buildFormulaHedge(profileRuns,formulaLadder.five,positionLadder.positionLedger).evidence);
+  const primarySix=new Set(formulaLadder.six),positionSix=new Set(positionLadder.six),routeUnion=new Set([...primarySix,...positionSix]),latestSourceSet=new Set(latestSource),latestTargetSet=new Set(latestTarget);
+  const sharedSpine=formulaLadder.four.filter(digit=>positionLadder.four.includes(digit));if(sharedSpine.length!==2)return null;
+  const retainedTargetCore=formulaLadder.four.filter(digit=>latestTargetSet.has(digit)&&!sharedSpine.includes(digit));if(retainedTargetCore.length!==1)return null;
+  const missingTargetDigits=latestTarget.filter(digit=>!primarySix.has(digit));if(missingTargetDigits.length!==2)return null;
+  const sourceTargetDigits=missingTargetDigits.filter(digit=>latestSourceSet.has(digit)&&positionSix.has(digit));if(sourceTargetDigits.length!==1)return null;
+  const orthogonalDigits=missingTargetDigits.filter(digit=>!latestSourceSet.has(digit)&&!routeUnion.has(digit));if(orthogonalDigits.length!==1)return null;
+  const describe=digit=>({digit,target:target.get(digit),independent:independent.get(digit),position:position.get(digit),hedge:hedge.get(digit)});
+  const retained=describe(retainedTargetCore[0]),sourceTargetCandidate=describe(sourceTargetDigits[0]),orthogonalCandidate=describe(orthogonalDigits[0]);
+  if(retained.target?.rank>3||retained.target?.activeFamilies<3||retained.target?.activeRecentHits<6||retained.independent?.confluenceFamilies<6||
+    sourceTargetCandidate.target?.activeFamilies<3||sourceTargetCandidate.target?.activeRecentHits<6||sourceTargetCandidate.independent?.confluenceFamilies<6||sourceTargetCandidate.position?.activeProfiles<1||sourceTargetCandidate.position?.rank>6||sourceTargetCandidate.hedge?.tieProfiles<3||sourceTargetCandidate.hedge?.tiePositions<3||sourceTargetCandidate.hedge?.runnerPlacements<12||
+    orthogonalCandidate.target?.activeFamilies<1||orthogonalCandidate.target?.tieFamilies<2||orthogonalCandidate.independent?.activeFamilies<1||orthogonalCandidate.independent?.tieFamilies<2||orthogonalCandidate.hedge?.tieProfiles<3||orthogonalCandidate.hedge?.tiePositions<2)return null;
+  const reserveCandidates=formulaLadder.four.filter(digit=>!sharedSpine.includes(digit)&&digit!==retained.digit).map(digit=>describe(digit)).filter(row=>
+    row.target?.rank<=2&&row.target?.activeFamilies>=5&&row.target?.activeRecentHits>=9&&row.target?.maxPositionCount>=3
+  );
+  if(reserveCandidates.length!==1)return null;const reserve=reserveCandidates[0];
+  const four=[...sharedSpine,retained.digit,sourceTargetCandidate.digit],five=[...four,orthogonalCandidate.digit],six=[...five,reserve.digit];
+  if(new Set(four).size!==4||new Set(five).size!==5||new Set(six).size!==6)return null;
+  return {four,five,six,sharedSpine,retainedTargetCore:retained,sourceTargetCandidate,orthogonalCandidate,reserve,priorFour:formulaLadder.four.slice(),priorFive:formulaLadder.five.slice(),priorSix:formulaLadder.six.slice(),latestSourceDigits:rows[0].digits.slice(),latestTargetDigits:ledger.latestTarget.digits.slice(),targetTransitions:ledger.transitions.length,mode:'replay-independent-target-carry-twin',modeLabel:'Replay-Independent Target-Carry Twin Recovery'};
+}
 function dualRouteCombinedBreadth(row){
   return (row.target?.activeFamilies||0)+(row.independent?.activeFamilies||0)+(row.position?.activeFamilies||0);
 }
@@ -911,7 +938,7 @@ function buildPrediction(inputRows){
   const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),profileRuns=LOCAL_PROFILES.map(p=>buildFormulaRelationRun(rows,p));
   const selectedCore=profileRuns.find(r=>r.profile.id==='formula-first')||profileRuns[0];
   const positionLadder=buildFormulaEvidenceLadder(profileRuns),independentLattice=buildIndependentRelationLattice(profileRuns,positionLadder),routeDecision=chooseFormulaRoute(rows,positionLadder,independentLattice),useIndependent=routeDecision.useIndependent;
-  let formulaLadder=useIndependent?independentLattice:positionLadder,weakSixSeat=null,boundarySeat=null,corePromotion=null,historyConditioned=null,crossRouteConcentration=null,targetDayBridge=null,nearTieTargetCoverage=null,replayKCounterRouteGuard=null,dualRouteDigitCoverageRecovery=null,strongWinCounterRouteHedgeRecovery=null,nearParitySparseOverlapRecovery=null;
+  let formulaLadder=useIndependent?independentLattice:positionLadder,weakSixSeat=null,boundarySeat=null,corePromotion=null,historyConditioned=null,crossRouteConcentration=null,targetDayBridge=null,nearTieTargetCoverage=null,replayKCounterRouteGuard=null,replayIndependentTargetCarryTwinRecovery=null,dualRouteDigitCoverageRecovery=null,strongWinCounterRouteHedgeRecovery=null,nearParitySparseOverlapRecovery=null;
   if(routeDecision.replayValidated){
     formulaLadder={...independentLattice,mode:'replay-independent',modeLabel:'Replay-Validated Independent Route',routeNote:'Replay lokal pada pasangan hari yang sama memilih keluarga independen hanya setelah enam uji, keunggulan 4D, dan irisan inti lolos bersama. Nama market tidak ikut mengambil keputusan.'};
   }else if(routeDecision.structural){
@@ -942,6 +969,8 @@ function buildPrediction(inputRows){
   if(nearTieTargetCoverage)formulaLadder=nearTieTargetCoverage;
   if(!targetDayBridge&&useIndependent)replayKCounterRouteGuard=buildReplayKCounterRouteGuard(rows,selectedCore.targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage);
   if(replayKCounterRouteGuard)formulaLadder={...formulaLadder,six:replayKCounterRouteGuard.six,five:replayKCounterRouteGuard.five,four:replayKCounterRouteGuard.four,replayKCounterRouteGuard,mode:replayKCounterRouteGuard.mode,modeLabel:replayKCounterRouteGuard.modeLabel,routeNote:`${formulaLadder.routeNote} Rute independen tetap menang replay, tetapi hanya dua digit beririsan dengan rute posisi. Pemimpin K yang ACTIVE pada seluruh profil, berada di inti posisi, dan mempunyai recurrence A–K–L–E menjaga kursi keenam; digit keenam lama tanpa keluarga ACTIVE posisi dilepas.`};
+  if(!targetDayBridge&&useIndependent&&!replayKCounterRouteGuard)replayIndependentTargetCarryTwinRecovery=buildReplayIndependentTargetCarryTwinRecovery(rows,selectedCore.targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,profileRuns,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage,replayKCounterRouteGuard);
+  if(replayIndependentTargetCarryTwinRecovery)formulaLadder={...formulaLadder,six:replayIndependentTargetCarryTwinRecovery.six,five:replayIndependentTargetCarryTwinRecovery.five,four:replayIndependentTargetCarryTwinRecovery.four,replayIndependentTargetCarryTwinRecovery,mode:replayIndependentTargetCarryTwinRecovery.mode,modeLabel:replayIndependentTargetCarryTwinRecovery.modeLabel,routeNote:`${formulaLadder.routeNote} Saat kemenangan replay independen sangat besar tetapi dua digit hasil target-day terakhir hilang dari 6D, dua digit persetujuan inti menjadi spine. Satu digit yang bertemu pada sumber, target-day, dan counter-route masuk 4D; satu carry target-day di luar gabungan rute masuk 5D; cadangan target-day terkuat menjaga kursi keenam.`};
   if(!targetDayBridge&&!useIndependent&&!nearTieTargetCoverage)dualRouteDigitCoverageRecovery=buildDualRouteDigitCoverageRecovery(rows,selectedCore.targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage,replayKCounterRouteGuard);
   if(dualRouteDigitCoverageRecovery)formulaLadder={...formulaLadder,six:dualRouteDigitCoverageRecovery.six,five:dualRouteDigitCoverageRecovery.five,four:dualRouteDigitCoverageRecovery.four,dualRouteDigitCoverageRecovery,mode:dualRouteDigitCoverageRecovery.mode,modeLabel:dualRouteDigitCoverageRecovery.modeLabel,routeNote:`${formulaLadder.routeNote} Rute posisi menang pada 4D, tetapi irisan antarrute hanya satu digit dan rute independen unggul pada cakupan 6D. Satu anchor target-day serta satu anchor keluarga independen menggantikan dua digit 5D yang paling terkonsentrasi pada satu rute; kursi batas TIE tetap dijaga.`};
   if(!targetDayBridge&&!useIndependent&&!nearTieTargetCoverage&&!dualRouteDigitCoverageRecovery)strongWinCounterRouteHedgeRecovery=buildStrongWinCounterRouteHedgeRecovery(rows,selectedCore.targetDay,formulaLadder,positionLadder,independentLattice,routeDecision,profileRuns,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage,replayKCounterRouteGuard,dualRouteDigitCoverageRecovery);
@@ -980,7 +1009,8 @@ function buildPrediction(inputRows){
   const core={...selectedCore,finalDigits:formulaLadder.six,strongFive:formulaLadder.five,strongFour:formulaLadder.four,secondary,formulaLadder,ak,le};
   let twinPortfolio=routeDecision.structural?buildIndependentTwinPortfolio(core):buildTwinPortfolio(core,profileRuns);
   if(targetDayBridge)twinPortfolio=applyTargetDayTwinBridge(twinPortfolio,targetDayBridge);
-  return {...core,twinPortfolio,profileRuns,positionLadder,independentLattice,useIndependent,routeDecision,weakSixSeat,boundarySeat,corePromotion,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage,replayKCounterRouteGuard,dualRouteDigitCoverageRecovery,strongWinCounterRouteHedgeRecovery,nearParitySparseOverlapRecovery};
+  if(replayIndependentTargetCarryTwinRecovery)twinPortfolio=applyReplayTargetCarryTwin(twinPortfolio,replayIndependentTargetCarryTwinRecovery);
+  return {...core,twinPortfolio,profileRuns,positionLadder,independentLattice,useIndependent,routeDecision,weakSixSeat,boundarySeat,corePromotion,historyConditioned,crossRouteConcentration,targetDayBridge,nearTieTargetCoverage,replayKCounterRouteGuard,replayIndependentTargetCarryTwinRecovery,dualRouteDigitCoverageRecovery,strongWinCounterRouteHedgeRecovery,nearParitySparseOverlapRecovery};
 }
 function buildPairs(left,right){
   const out=[];left.slice(0,3).forEach((a,ia)=>right.slice(0,3).forEach((b,ib)=>out.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.08*(ia+ib)})));
@@ -1044,6 +1074,12 @@ function buildTwinPortfolio(core,profileRuns){
   });
   const candidates=pool.slice().sort(compareTwinEvidence),choices=candidates.slice(0,2).map((x,i)=>({...x,pair:`${x.digit}${x.digit}`,choice:i+1}));
   return {pool,choices,digits:coreFour,candidates,state:'PENJAGAAN FORMULA'};
+}
+function applyReplayTargetCarryTwin(portfolio,recovery){
+  const promoted=portfolio.pool.find(row=>row.digit===recovery?.sourceTargetCandidate?.digit),runner=portfolio.candidates.find(row=>row.digit!==recovery?.sourceTargetCandidate?.digit);
+  if(!promoted||!runner)return portfolio;
+  const choices=[promoted,runner].map((row,index)=>({...row,pair:`${row.digit}${row.digit}`,choice:index+1,sourceTargetContinuity:row.digit===promoted.digit}));
+  return {...portfolio,choices,state:'PENJAGAAN SUMBER + TARGET-DAY'};
 }
 function applyTargetDayTwinBridge(portfolio,targetDayBridge){
   if(targetDayBridge.twinStrategy==='preserve')return portfolio;
@@ -1122,7 +1158,7 @@ function signalGrade(model,transitions,posRank,ecology){
 
 function digitCards(digits,cls=''){return `<div class="digits compact">${digits.map(d=>`<div class="digit ${cls}"><b>${d}</b></div>`).join('')}</div>`;}
 function pairCards(items,cls){return `<div class="pair-grid">${items.map(x=>`<div class="pair-card ${cls}"><b>${x.pair}</b></div>`).join('')}</div>`;}
-function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • ${x.repeatPosition?'repeat-position':x.sourceContinuity?'kontinuitas sumber':x.targetDayBridge?'anchor target-day':x.repeatDepth?'kedalaman repeat seluruh replay':'digit formula'}</small><b>${x.pair}</b><span>Bentuk posisi kandidat ${x.bestShape.label} • belum mengunci posisi</span></div>`).join('')}</div>`;}
+function twinChoiceCards(items){return `<div class="twin-choice-grid">${items.map(x=>`<div class="twin-choice"><small>Pilihan kembar ${x.choice} • ${x.sourceTargetContinuity?'kontinuitas sumber–target':x.repeatPosition?'repeat-position':x.sourceContinuity?'kontinuitas sumber':x.targetDayBridge?'anchor target-day':x.repeatDepth?'kedalaman repeat seluruh replay':'digit formula'}</small><b>${x.pair}</b><span>Bentuk posisi kandidat ${x.bestShape.label} • belum mengunci posisi</span></div>`).join('')}</div>`;}
 function renderResult(r){
   $('output').className='result';
   if($('modelPill'))$('modelPill').textContent=r.formulaLadder.modeLabel;
@@ -1134,6 +1170,7 @@ function renderResult(r){
       ${r.historyConditioned?`<div class="history-conditioned-seat"><b>Validasi nilai lintas-riwayat</b><span>${r.historyConditioned.supportedDigits} digit memiliki recurrence nilai mandiri; echo latest tidak dihitung sebagai keluarga baru • kursi keenam coverage ${r.historyConditioned.coverageSeat}</span></div>`:''}
       ${r.nearTieTargetCoverage?`<div class="target-day-bridge-seat"><b>Pemulihan cakupan near-tie ${r.targetDay}</b><span>${r.nearTieTargetCoverage.latestTargetDigits.join('')} → ${r.nearTieTargetCoverage.candidateDigits.join(' ')} • ${r.nearTieTargetCoverage.targetTransitions} replay target-day • masuk kursi kelima dan keenam</span></div>`:''}
       ${r.replayKCounterRouteGuard?`<div class="target-day-bridge-seat"><b>Penjaga K dari counter-route</b><span>${r.replayKCounterRouteGuard.candidateDigit} menggantikan ${r.replayKCounterRouteGuard.replacedDigit} pada kursi keenam • 4 profil ACTIVE K • recurrence A–K–L–E • 4D dan 5D tetap</span></div>`:''}
+      ${r.replayIndependentTargetCarryTwinRecovery?`<div class="target-day-bridge-seat"><b>Pemulihan carry target-day dan kembar</b><span>spine lintas-rute ${r.replayIndependentTargetCarryTwinRecovery.sharedSpine.join(' ')} • kontinuitas sumber–target ${r.replayIndependentTargetCarryTwinRecovery.sourceTargetCandidate.digit} masuk 4D • carry ortogonal ${r.replayIndependentTargetCarryTwinRecovery.orthogonalCandidate.digit} masuk 5D • cadangan ${r.replayIndependentTargetCarryTwinRecovery.reserve.digit} menjaga 6D</span></div>`:''}
       ${r.dualRouteDigitCoverageRecovery?`<div class="target-day-bridge-seat"><b>Pemulihan cakupan dua rute</b><span>anchor ${r.targetDay} ${r.dualRouteDigitCoverageRecovery.targetCandidate.digit} • anchor independen ${r.dualRouteDigitCoverageRecovery.coverageCandidate.digit} • kursi batas ${r.dualRouteDigitCoverageRecovery.boundary.digit} dipertahankan • ${r.dualRouteDigitCoverageRecovery.targetTransitions} replay target-day</span></div>`:''}
       ${r.strongWinCounterRouteHedgeRecovery?`<div class="target-day-bridge-seat"><b>Penjaga counter-route dan hedge</b><span>spine ${r.strongFour.join(' ')} • echo counter-route ${r.strongWinCounterRouteHedgeRecovery.counterCandidate.digit} masuk 5D • hedge TIE ${r.strongWinCounterRouteHedgeRecovery.hedgeCandidate.digit} masuk 6D • ${r.strongWinCounterRouteHedgeRecovery.targetTransitions} replay target-day</span></div>`:''}
       ${r.nearParitySparseOverlapRecovery?`<div class="target-day-bridge-seat"><b>Pemulihan near-parity sparse-overlap</b><span>spine lintas-rute ${r.nearParitySparseOverlapRecovery.sharedDigits.join(' ')} • anchor independen ${r.nearParitySparseOverlapRecovery.coverageCandidate.digit} masuk 4D • kontinuitas ${r.targetDay} ${r.nearParitySparseOverlapRecovery.continuityCandidate.digit} masuk 5D • cadangan ${r.nearParitySparseOverlapRecovery.reserve.digit} menjaga 6D</span></div>`:''}
@@ -1151,4 +1188,4 @@ function renderResult(r){
     <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga otomatis. Router replay menilai jalur rumus, bukan peluang digit; nama market dan hasil yang belum masuk data tidak dipakai dalam keputusan.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,buildCrossRouteConcentrationLadder,buildHistoryConditionedIndependentLadder,buildTargetDayRecurrenceLedger,buildTargetDayRecurrenceBridge,buildDuplicateSourceTargetDayBridge,buildDominantTargetDayBridge,buildStructuralTargetDayCoreBridge,buildSplitEvidenceRepeatPositionBridge,buildStructuralTargetDayAnchorRestoration,buildTargetPositionBoundaryRetention,buildStructuralReplayLossRecovery,buildNearTieTargetCoverage,buildMiddlePositionTargetDayRecovery,buildReplayKCounterRouteGuard,buildDualRouteDigitCoverageRecovery,buildStrongWinCounterRouteHedgeRecovery,buildNearParitySparseOverlapRecovery,needsIndependentRelationRoute,weightedRouteReplay,chooseFormulaRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildCounterRouteHedge,applyTargetDayHedgeBridge,buildPairBalanceBoundarySeat,promotePairBalanceCore,buildTwinPortfolio,applyTargetDayTwinBridge,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,pairBalanceFormulaLibrary,LOCAL_PROFILES};
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,buildCrossRouteConcentrationLadder,buildHistoryConditionedIndependentLadder,buildTargetDayRecurrenceLedger,buildTargetDayRecurrenceBridge,buildDuplicateSourceTargetDayBridge,buildDominantTargetDayBridge,buildStructuralTargetDayCoreBridge,buildSplitEvidenceRepeatPositionBridge,buildStructuralTargetDayAnchorRestoration,buildTargetPositionBoundaryRetention,buildStructuralReplayLossRecovery,buildNearTieTargetCoverage,buildMiddlePositionTargetDayRecovery,buildReplayKCounterRouteGuard,buildReplayIndependentTargetCarryTwinRecovery,buildDualRouteDigitCoverageRecovery,buildStrongWinCounterRouteHedgeRecovery,buildNearParitySparseOverlapRecovery,needsIndependentRelationRoute,weightedRouteReplay,chooseFormulaRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildCounterRouteHedge,applyTargetDayHedgeBridge,buildPairBalanceBoundarySeat,promotePairBalanceCore,buildTwinPortfolio,applyReplayTargetCarryTwin,applyTargetDayTwinBridge,buildIndependentTwinPortfolio,renderResult,inferTargetDay,transitionsFor,formulaLibrary,pairBalanceFormulaLibrary,LOCAL_PROFILES};
