@@ -191,3 +191,17 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 /* V13.12 • Target-day source-structure ecology + orthogonal runner preservation */
 
 /* V13.13 • Split-evidence repeat-position bridge + source-continuity twin guard */
+
+/* V13.34 • Dynamic Bayesian main-vs-reserve audit */
+.dynamic-audit-card{border:1px solid #cbd5e1;border-radius:19px;background:linear-gradient(135deg,#f8fafc,#fff);padding:12px;text-align:left}
+.dynamic-audit-card.is-rejected{border-color:#fca5a5;background:linear-gradient(135deg,#fff1f2,#fff 58%,#f8fafc)}
+.dynamic-audit-card.is-accepted{border-color:#86efac;background:linear-gradient(135deg,#f0fdf4,#fff 58%,#ecfeff)}
+.dynamic-audit-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dynamic-audit-head small{display:block;color:#64748b;font-size:9px;font-weight:950;letter-spacing:.09em;text-transform:uppercase}
+.dynamic-audit-head b{display:block;margin-top:3px;color:#0f172a;font-size:13px}
+.dynamic-audit-head>span{border:1px solid #e2e8f0;border-radius:999px;background:#fff;color:#475569;padding:6px 9px;font-size:9px;font-weight:900}
+.dynamic-audit-card.is-rejected .dynamic-audit-head b{color:#b91c1c}.dynamic-audit-card.is-accepted .dynamic-audit-head b{color:#166534}
+.dynamic-audit-card p{margin:8px 0;color:#475569;font-size:10px;font-weight:750;line-height:1.5}
+.dynamic-audit-metrics{display:flex;flex-wrap:wrap;gap:6px}.dynamic-audit-metrics span{border:1px solid #e2e8f0;border-radius:999px;background:#fff;color:#334155;padding:5px 8px;font-size:9px;font-weight:900}
+.dynamic-family-note{display:block;margin-top:8px;color:#64748b;font-size:9px;font-weight:800;line-height:1.45}
+@media(max-width:620px){.dynamic-audit-head{align-items:flex-start;flex-direction:column}}
