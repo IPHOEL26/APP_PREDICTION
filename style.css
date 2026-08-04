@@ -100,6 +100,25 @@ textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 5px rgba(37,99,235,.12),ins
 @keyframes scanEdgeFlow{0%{background-position:0 0}100%{background-position:0 220%}}
 @media(prefers-reduced-motion:reduce){.scan-beam,.scan-edge{animation-duration:5s}}
 
+/* V14.00 • Formula Atlas 500 */
+.atlas-summary,.atlas-card,.atlas-final{border:1px solid #dbeafe;border-radius:24px;background:#fff;padding:16px;margin-bottom:12px;box-shadow:0 12px 28px rgba(15,23,42,.055)}
+.atlas-summary{background:linear-gradient(135deg,#eff6ff,#fff7ed 48%,#fdf2f8)}
+.atlas-summary h3{margin:3px 0 12px;font-size:22px;letter-spacing:-.025em;color:#0f172a}
+.atlas-route{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid #c7d2fe;border-radius:16px;background:rgba(255,255,255,.78);padding:10px 12px;margin-bottom:12px}
+.atlas-route b{color:#3730a3;font-size:12px}.atlas-route span{color:#64748b;font-size:11px;font-weight:850;text-transform:uppercase;letter-spacing:.06em}
+.atlas-ladder{display:grid;gap:9px;margin-top:10px}.atlas-ladder>div{display:grid;grid-template-columns:minmax(104px,.36fr) 1fr;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.88);border-radius:18px;background:rgba(255,255,255,.72);padding:10px}
+.atlas-ladder>div>small{font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#1d4ed8;line-height:1.4}.frozen-ladder>div>small{color:#92400e}
+.atlas-ladder .digits{justify-content:flex-start}.atlas-ladder .digit{width:46px;height:56px;border-radius:15px;font-size:27px}
+.atlas-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px}.atlas-card-head small{display:block;color:#7c3aed;font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.11em;margin-bottom:3px}.atlas-card-head b{display:block;color:#0f172a;font-size:16px}.atlas-card-head>span{border-radius:999px;background:#eef2ff;color:#4338ca;padding:6px 9px;font-size:10px;font-weight:900}
+.atlas-card>p{margin:9px 0 0;color:#475569;font-size:11px;line-height:1.55}
+.atlas-methods{display:grid;gap:7px}.atlas-methods>div{display:grid;grid-template-columns:30px 1fr;gap:9px;align-items:center;border:1px solid #e2e8f0;border-radius:14px;padding:8px;background:#f8fafc}.atlas-methods>div>span{width:28px;height:28px;border-radius:9px;background:#2563eb;color:#fff;display:grid;place-items:center;font-size:11px;font-weight:950}.atlas-methods p{margin:0}.atlas-methods b{display:block;font-size:12px;color:#0f172a}.atlas-methods small{display:block;margin-top:2px;color:#64748b;font-size:10px;line-height:1.35}
+.atlas-metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.atlas-metric{border:1px solid #e2e8f0;border-radius:15px;padding:10px;background:linear-gradient(135deg,#fff,#f8fafc)}.atlas-metric b{display:block;color:#1d4ed8;font-size:13px}.atlas-metric span{display:block;color:#64748b;font-size:10px;line-height:1.45;margin-top:3px}
+.atlas-window{display:grid;gap:3px;border-top:1px solid #e2e8f0;margin-top:10px;padding-top:9px}.atlas-window b{font-size:11px;color:#0f172a}.atlas-window span{font-size:10px;line-height:1.45;color:#64748b}
+.atlas-subhead{font-size:11px;font-weight:950;color:#be123c;text-transform:uppercase;letter-spacing:.09em;margin:14px 0 8px}.atlas-hybrid-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.atlas-hybrid{position:relative;border:1px solid #fde68a;border-radius:16px;padding:10px;text-align:center;background:#fffbeb}.atlas-hybrid small{position:absolute;left:7px;top:6px;font-size:8px;color:#92400e}.atlas-hybrid b{display:block;font-size:26px;letter-spacing:.08em;color:#78350f}.atlas-hybrid span{display:block;color:#92400e;font-size:9px;line-height:1.35;margin-top:3px}
+.twin-atlas{border-color:#fecdd3;background:linear-gradient(135deg,#fff,#fff1f2)}
+.atlas-final{border-color:#a7f3d0;background:linear-gradient(135deg,#ecfdf5,#fff)}.atlas-final h4{margin:0 0 10px;color:#047857}.atlas-final p{margin:5px 0;color:#334155;font-size:12px;line-height:1.4}.atlas-final p b{color:#0f172a}
+@media(max-width:720px){.atlas-ladder>div{grid-template-columns:1fr}.atlas-metric-grid,.atlas-hybrid-grid{grid-template-columns:1fr}.atlas-route{align-items:flex-start;flex-direction:column}}
+
 
 /* V11.7 • Exact-Position Emergence Rescue + Carry Abstention */
 .audit-columns>div:nth-child(odd){border-left:4px solid rgba(37,99,235,.45)}

@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 'IPHOEL Formula Engine V13.34 • Dynamic Bayesian Audit';
+const APP_VERSION = 'IPHOEL Formula Engine V14.00 • Formula Atlas 500';
 const DIGITS = [0,1,2,3,4,5,6,7,8,9];
 const POS = ['A','K','L','E'];
 const TWIN_SHAPES = [[0,1,'A=K'],[1,2,'K=L'],[2,3,'L=E'],[0,3,'A=E'],[0,2,'A=L'],[1,3,'K=E']];
@@ -24,7 +24,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function init(){
   $('versionPill').textContent=APP_VERSION;
-  $('modelPill').textContent='Replay-Routed Formula Ladder';
+  $('modelPill').textContent='Formula Atlas 500 • Walk-Forward';
   $('dataInput').addEventListener('input',debounce(analyze,260));
   $('btnClear').addEventListener('click',clearAll);
 }
@@ -40,11 +40,11 @@ async function analyze(){
   const id=++runId, rows=parseRows($('dataInput').value);
   $('rowCounter').textContent=`${rows.length} baris`;
   if(rows.length<12){ $('output').className='empty-state'; $('output').innerHTML='<div><div class="empty-icon">Φ</div><h3>Data belum cukup</h3><p>Minimal 12 baris agar replay formula tidak terlalu rapuh.</p></div>'; return; }
-  const stages=['Normalisasi satu market','Membalik riwayat tertua → terbaru','Membangun transisi hari market','Replay jalur posisi vs keluarga independen','Menyusun tangga formula 6D → 5D → 4D','Mengambil kembar hanya dari 4D inti'];
+  const stages=['Normalisasi 20–56 riwayat','Memetakan 500 metode ke keluarga yang layak','Membentuk kandidat frekuensi, tren, Markov, regresi, tree, neural, dan simulasi','Walk-forward tanpa kebocoran masa depan','Memilih ensemble utama dan formula beku ortogonal','Mengaudit gabungan, repeat, kembar, serta AK/LE'];
   scanner(true,rows,0,stages[0]);
   for(let i=0;i<stages.length;i++){ if(id!==runId)return; scanner(true,rows,(i+1)/stages.length,stages[i]); await sleep(110); }
   if(id!==runId)return;
-  const result=buildPrediction(rows); renderResult(result); scanner(false,rows,1,'Scan selesai • profil diuji integritas; konflik diselesaikan tanpa rescue pasca-ranking');
+  const result=buildPrediction(rows); renderResult(result); scanner(false,rows,1,'Scan selesai • formula dipilih oleh replay, bukan nama market atau angka sasaran');
 }
 function scanner(active,rows,progress,label){
   const frame=$('scannerFrame'); if(frame){frame.classList.toggle('is-scanning',active);frame.classList.toggle('is-complete',!active&&progress>=1);}
@@ -76,9 +76,12 @@ function dateValue(date){
 function parseRows(raw){
   const out=[];
   cleanText(raw).split(/\n+/).map(normalizeLine).filter(Boolean).forEach((line,index)=>{
-    const code=line.match(/\b([A-Z][A-Z0-9]{1,7})\s*\[\s*(\d{1,8})\s*\]/i);
-    const digits=parseDigits(code?line.slice(line.lastIndexOf(']')+1):line); if(digits.length<4)return;
-    out.push({code:code?code[1].toUpperCase():'',period:code?Number(code[2]):0,date:extractDate(line),day:normalizeDay(line),digits:digits.slice(0,4),index,raw:line});
+    const bracket=line.match(/\b([A-Z][A-Z0-9 :]{1,14})\s*\[\s*(\d{1,8})\s*\]/i);
+    const compact=!bracket&&line.match(/\b([A-Z][A-Z0-9 :]{1,14}?)\s*-\s*(\d{1,8})(?=\s|$)/i);
+    const code=bracket||compact,tail=bracket?line.slice(line.lastIndexOf(']')+1):compact?line.slice((compact.index||0)+compact[0].length):line;
+    const digits=parseDigits(tail); if(digits.length<4)return;
+    const date=extractDate(line),stamp=dateValue(date),derivedDay=stamp?DAYS[new Date(stamp).getDay()]:'';
+    out.push({code:code?code[1].trim().replace(/\s+/g,' ').toUpperCase():'',period:code?Number(code[2]):0,date,day:normalizeDay(line)||derivedDay,digits:digits.slice(0,4),index,raw:line});
   });
   const market=out[0]?.code||''; const seen=new Set();
   return out.filter(r=>!market||r.code===market).filter(r=>{const k=`${r.code}|${r.period}|${r.date}|${r.digits.join('')}`;if(seen.has(k))return false;seen.add(k);return true;})
@@ -1640,4 +1643,282 @@ function renderResult(r){
     <div class="formula-integrity-note">Urutan 4D ⊂ 5D ⊂ 6D dijaga otomatis. Seluruh digit pembentuk AK dan LE berasal dari 6D utama; ini pagar konsistensi, bukan jaminan kemunculan. Router replay menilai jalur rumus, bukan peluang digit; nama market dan hasil yang belum masuk data tidak dipakai dalam keputusan.</div>`;
 }
 
-if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildLegacyPrediction,buildDynamicBayesianLedger,buildDominanceSwapCandidate,buildDynamicStatisticalAudit,calibrateTwinPortfolioByActualRepeats,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,buildCrossRouteConcentrationLadder,buildHistoryConditionedIndependentLadder,buildTargetDayRecurrenceLedger,buildLagTargetDayRelationLedger,buildTargetDayMarginalLedger,buildTargetDayRecurrenceBridge,buildDuplicateSourceTargetDayBridge,buildDominantTargetDayBridge,buildStructuralTargetDayCoreBridge,buildSplitEvidenceRepeatPositionBridge,buildStructuralTargetDayAnchorRestoration,buildTargetPositionBoundaryRetention,buildStructuralReplayLossRecovery,buildNearTieTargetCoverage,buildMiddlePositionTargetDayRecovery,buildReplayKCounterRouteGuard,buildReplayIndependentTargetCarryTwinRecovery,buildTargetTwinCrossRouteRecovery,buildPositionBoundaryTargetTwinRecovery,buildDualRouteDigitCoverageRecovery,buildStrongWinCounterRouteHedgeRecovery,buildNearParitySparseOverlapRecovery,buildLongHorizonEchoRecovery,buildRepeatedSourceNeighborCarryRecovery,buildSourceTwinMirrorRecovery,buildNearParityTwoStepUnionRecovery,buildCurrentActiveSetEvidence,buildStructuralConsensusCarryRecovery,buildOrthogonalHorizonSplitRecovery,buildCollapsedUniverseOrthogonalRecovery,needsIndependentRelationRoute,weightedRouteReplay,chooseFormulaRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildPureFormulaReserve,buildCounterRouteHedge,applyTargetDayHedgeBridge,buildPairBalanceBoundarySeat,promotePairBalanceCore,buildTwinPortfolio,applyReplayTargetCarryTwin,applyTargetTwinCrossRouteTwin,applyPositionBoundaryTargetTwin,applySourceTwinMirrorTwin,applyTargetDayTwinBridge,buildIndependentTwinPortfolio,applyStructuralTargetTwinSpecialist,applyCollapsedUniverseTwinAudit,renderResult,inferTargetDay,transitionsFor,formulaLibrary,pairBalanceFormulaLibrary,LOCAL_PROFILES};
+/* ========================================================================
+   V14.00 • FORMULA ATLAS 500
+
+   Lima ratus nama metode yang diberikan pengguna diperlakukan sebagai atlas
+   metodologis, bukan sebagai 500 suara yang dipaksakan. Banyak metode adalah
+   variasi estimasi, penguji, optimizer, atau membutuhkan sampel jauh lebih
+   besar daripada 56x4 digit. Lapisan berikut memetakan atlas itu ke kandidat
+   yang benar-benar dapat dijalankan secara lokal, kemudian memilihnya hanya
+   melalui walk-forward tanpa melihat hasil masa depan.
+   ======================================================================== */
+
+const ATLAS_CATEGORIES = [
+  {range:'1–50',label:'Pola bilangan & transformasi',count:50,role:'fitur',examples:'Fibonacci, modulo, mirror, reverse, complement'},
+  {range:'51–100',label:'Statistik dasar',count:50,role:'aktif',examples:'frequency, positional frequency, entropy, robust mean'},
+  {range:'101–150',label:'Probabilitas & distribusi',count:50,role:'aktif',examples:'Bayes, Dirichlet, empirical probability, MAP'},
+  {range:'151–200',label:'Rata-rata bergerak & tren',count:50,role:'aktif',examples:'rolling window, EMA, moving mode, local trend'},
+  {range:'201–250',label:'Deret waktu',count:50,role:'aktif terbatas',examples:'Markov, autocorrelation, state transition, Fourier guard'},
+  {range:'251–300',label:'Regresi & klasifikasi',count:50,role:'aktif terbatas',examples:'linear/logistic regression, kNN, naive Bayes, tree'},
+  {range:'301–350',label:'Jaringan saraf & ML',count:50,role:'aktif terbatas',examples:'MLP ringan, ensemble, online learning'},
+  {range:'351–400',label:'Optimasi & simulasi',count:50,role:'audit',examples:'bootstrap, Monte Carlo, deterministic search'},
+  {range:'401–450',label:'Pola kemunculan digit',count:50,role:'aktif',examples:'gap, pair, triple, repeat, weekday position'},
+  {range:'451–500',label:'Evaluasi & gabungan model',count:50,role:'validator',examples:'walk-forward, rolling-origin, rank averaging, stacking'}
+];
+
+function atlasSafeVector(values){
+  const raw=DIGITS.map(d=>Number.isFinite(Number(values?.[d]))?Number(values[d]):0),lo=Math.min(...raw),hi=Math.max(...raw);
+  if(hi-lo<1e-12)return raw.map(()=>.5);
+  return raw.map(v=>(v-lo)/(hi-lo));
+}
+function atlasSigmoid(x){return 1/(1+Math.exp(-Math.max(-30,Math.min(30,x))));}
+function atlasJaccard(a,b){const A=new Set(a),B=new Set(b),u=new Set([...A,...B]);return u.size?[...A].filter(d=>B.has(d)).length/u.size:0;}
+function atlasRank(scores){return DIGITS.map(d=>({digit:d,score:Number(scores[d])||0})).sort((a,b)=>b.score-a.score||a.digit-b.digit);}
+function atlasTargetTransitions(rows,targetDay){
+  const chrono=rows.slice().reverse(),out=[];
+  for(let i=0;i<chrono.length-1;i++)if(chrono[i+1].day===targetDay)out.push({source:chrono[i],target:chrono[i+1]});
+  return out;
+}
+function atlasContext(rows,targetDay){
+  const clean=rows.slice().sort((a,b)=>dateValue(b.date)-dateValue(a.date)||(b.period||0)-(a.period||0)),chrono=clean.slice().reverse();
+  return {rows:clean,chrono,latest:clean[0],targetDay,targetRows:clean.filter(r=>r.day===targetDay),transitions:atlasTargetTransitions(clean,targetDay)};
+}
+function atlasPresence(rows,window=99,decay=1){
+  const picked=rows.slice(0,window),scores=Array(10).fill(.5),weights=Array(10).fill(1),den=1;
+  picked.forEach((row,i)=>{const w=Math.pow(decay,i);unique(row.digits).forEach(d=>scores[d]+=w);DIGITS.forEach(d=>weights[d]+=w);});
+  return scores.map((v,d)=>v/Math.max(den,weights[d]));
+}
+function atlasPositional(ctx){
+  const rows=ctx.targetRows.length>=3?ctx.targetRows:ctx.rows,scores=Array(10).fill(.5),den=Array(10).fill(1);
+  rows.forEach((row,i)=>{const w=Math.pow(.90,i);row.digits.forEach((d,p)=>{scores[d]+=w*(1+.12*p);DIGITS.forEach(x=>den[x]+=w/4);});});
+  return scores.map((v,d)=>v/den[d]);
+}
+function atlasDelay(ctx,mode){
+  const gaps=DIGITS.map(d=>digitRecentGap(ctx.rows,d)),max=Math.max(1,...gaps),hot=atlasPresence(ctx.rows,12,.88);
+  if(mode==='hot')return hot;
+  if(mode==='cold')return gaps.map(g=>g/max);
+  return DIGITS.map(d=>.58*hot[d]+.42*(gaps[d]/max));
+}
+function atlasTrend(ctx,window=20,logistic=false){
+  const series=ctx.targetRows.slice(0,window).reverse(),n=series.length;if(n<3)return atlasPresence(ctx.rows,window,.94);
+  const xMean=(n-1)/2,den=sum(series.map((_,i)=>(i-xMean)**2))||1;
+  return DIGITS.map(d=>{
+    const ys=series.map(r=>r.digits.includes(d)?1:0),yMean=mean(ys),slope=sum(ys.map((y,i)=>(i-xMean)*(y-yMean)))/den,pred=yMean+slope*(n-xMean);
+    return logistic?atlasSigmoid(3*(pred-.5)):clamp(pred,0,1);
+  });
+}
+function atlasMarkov(ctx,positional=false){
+  if(ctx.transitions.length<3)return atlasPresence(ctx.targetRows.length?ctx.targetRows:ctx.rows,20,.92);
+  const latest=ctx.latest.digits;
+  return DIGITS.map(d=>{
+    let hit=1,total=2;
+    ctx.transitions.forEach(tr=>{
+      let match;
+      if(positional)match=tr.source.digits.reduce((n,x,p)=>n+(x===latest[p]?1:0),0)/4;
+      else match=atlasJaccard(unique(tr.source.digits),unique(latest));
+      const w=.15+match;total+=w;if(tr.target.digits.includes(d))hit+=w;
+    });
+    return hit/total;
+  });
+}
+function atlasPairMarkov(ctx){
+  if(ctx.transitions.length<3)return atlasMarkov(ctx,false);
+  const latestPairs=[];for(let i=0;i<4;i++)for(let j=i+1;j<4;j++)latestPairs.push(`${ctx.latest.digits[i]}${ctx.latest.digits[j]}`);
+  return DIGITS.map(d=>{
+    let hit=1,total=2;
+    ctx.transitions.forEach(tr=>{let matches=0;for(let i=0;i<4;i++)for(let j=i+1;j<4;j++)if(latestPairs.includes(`${tr.source.digits[i]}${tr.source.digits[j]}`))matches++;const w=.08+matches/6;total+=w;if(tr.target.digits.includes(d))hit+=w;});
+    return hit/total;
+  });
+}
+function atlasKnn(ctx,k=5){
+  if(ctx.transitions.length<3)return atlasPresence(ctx.targetRows.length?ctx.targetRows:ctx.rows,20,.92);
+  const neighbors=ctx.transitions.map(tr=>{const exact=mean(tr.source.digits.map((d,p)=>d===ctx.latest.digits[p]?1:0));return {tr,w:.08+atlasJaccard(tr.source.digits,ctx.latest.digits)+.5*exact};}).sort((a,b)=>b.w-a.w).slice(0,k),den=2+sum(neighbors.map(n=>n.w));
+  return DIGITS.map(d=>(1+sum(neighbors.map(n=>n.w*(n.tr.target.digits.includes(d)?1:0))))/den);
+}
+function atlasTransform(ctx){
+  const byFamily={};formulaLibrary().forEach(f=>(byFamily[f.family]??=[]).push(f));const vote=Array(10).fill(0);
+  Object.values(byFamily).forEach(list=>{
+    const best=list.map(f=>{const hits=ctx.transitions.filter(tr=>tr.target.digits.includes(mod10(f.fn(tr.source.digits)))).length;return {f,hits,q:(1+hits)/(2+ctx.transitions.length)};}).sort((a,b)=>b.q-a.q||a.f.id.localeCompare(b.f.id))[0];
+    if(best){const d=mod10(best.f.fn(ctx.latest.digits));vote[d]+=Math.max(.02,best.q-.30);}
+  });
+  return vote;
+}
+function atlasFeatures(row){
+  const ds=row.digits,uniq=new Set(ds),features=ds.map(d=>d/9);
+  DIGITS.forEach(d=>features.push(ds.includes(d)?1:0));
+  features.push(sum(ds)/36,(4-uniq.size)/3,ds.filter(d=>d%2).length/4,ds.filter(d=>d>=5).length/4,digitalRoot(sum(ds))/9);
+  return features;
+}
+function atlasTree(ctx,forest=false,boost=false){
+  const trs=ctx.transitions;if(trs.length<4)return atlasMarkov(ctx,true);const X=trs.map(tr=>atlasFeatures(tr.source)),x=atlasFeatures(ctx.latest),F=x.length;
+  return DIGITS.map(d=>{
+    const y=trs.map(tr=>tr.target.digits.includes(d)?1:0),base=(1+sum(y))/(2+y.length),stumps=[];
+    for(let f=0;f<F;f++)for(const t of [.25,.5,.75]){
+      const left=y.filter((_,i)=>X[i][f]<=t),right=y.filter((_,i)=>X[i][f]>t);if(!left.length||!right.length)continue;
+      const lm=(1+sum(left))/(2+left.length),rm=(1+sum(right))/(2+right.length),loss=sum(y.map((v,i)=>(v-(X[i][f]<=t?lm:rm))**2));stumps.push({f,t,lm,rm,loss});
+    }
+    stumps.sort((a,b)=>a.loss-b.loss||a.f-b.f||a.t-b.t);
+    if(!stumps.length)return base;
+    if(boost){let p=base;stumps.slice(0,4).forEach((s,i)=>{const branch=x[s.f]<=s.t?s.lm:s.rm;p+=.28/(i+1)*(branch-base);});return clamp(p,0,1);}
+    if(forest)return mean(stumps.slice(0,Math.min(17,stumps.length)).map(s=>x[s.f]<=s.t?s.lm:s.rm));
+    const s=stumps[0];return x[s.f]<=s.t?s.lm:s.rm;
+  });
+}
+function atlasNeural(ctx){
+  const trs=ctx.transitions;if(trs.length<6)return atlasKnn(ctx,5);const X=trs.map(tr=>atlasFeatures(tr.source)),x=atlasFeatures(ctx.latest),F=x.length,outputs=[];
+  for(const digit of DIGITS){const w=Array(F+1).fill(0);for(let epoch=0;epoch<32;epoch++)trs.forEach((tr,i)=>{const y=tr.target.digits.includes(digit)?1:0,p=atlasSigmoid(w[0]+sum(X[i].map((v,j)=>v*w[j+1]))),err=y-p,lr=.07/(1+.04*epoch);w[0]+=lr*err;for(let j=0;j<F;j++)w[j+1]+=lr*(err*X[i][j]-.002*w[j+1]);});outputs.push(atlasSigmoid(w[0]+sum(x.map((v,j)=>v*w[j+1]))));}
+  return outputs;
+}
+function atlasBootstrap(ctx){
+  const rows=ctx.targetRows.length>=3?ctx.targetRows:ctx.rows.slice(0,20),scores=Array(10).fill(0),rounds=31;if(!rows.length)return scores;
+  for(let b=0;b<rounds;b++){const counts=Array(10).fill(1),den=2+rows.length;for(let i=0;i<rows.length;i++){const index=(i*7+b*11+b*b)%rows.length;unique(rows[index].digits).forEach(d=>counts[d]++);}DIGITS.forEach(d=>scores[d]+=counts[d]/den);}
+  return scores.map(v=>v/rounds);
+}
+function atlasModelSpecs(){
+  const out=[],add=(id,label,family,predict,minRows=12,minTransitions=0)=>out.push({id,label,family,predict,minRows,minTransitions});
+  [5,10,20,30,50].forEach(w=>add(`freq-${w}`,`Recent-Window Frequency ${w}`,'frekuensi',c=>atlasPresence(c.rows,w,1)));
+  [[3,.72],[5,.82],[8,.90],[13,.95]].forEach(([h,d])=>add(`ema-${h}`,`Exponential Weighted Frequency H${h}`,'tren',c=>atlasPresence(c.rows,50,d)));
+  [3,5,8,99].forEach(w=>add(`day-${w}`,`Day-Specific Frequency ${w===99?'penuh':w}`,'hari',c=>atlasPresence(c.targetRows.length?c.targetRows:c.rows,w,1),12,2));
+  add('weekday-position','Weekday Positional Frequency','posisi',atlasPositional,12,2);
+  add('delay-hot','Hot-Digit Recency','jarak',c=>atlasDelay(c,'hot'));
+  add('delay-cold','Overdue-Digit Delay','jarak',c=>atlasDelay(c,'cold'));
+  add('delay-balanced','Balanced Hot-Cold','jarak',c=>atlasDelay(c,'balanced'));
+  [10,20,50].forEach(w=>add(`trend-${w}`,`Linear Presence Trend ${w}`,'regresi',c=>atlasTrend(c,w,false),16,2));
+  add('trend-logistic','Logistic Presence Trend','regresi',c=>atlasTrend(c,50,true),18,3);
+  add('markov-set','First-Order Markov Set','markov',c=>atlasMarkov(c,false),14,3);
+  add('markov-position','Position-Conditioned Markov','markov',c=>atlasMarkov(c,true),14,3);
+  add('markov-pair','Pair-Frequency Markov','pasangan',atlasPairMarkov,16,3);
+  [3,5,8].forEach(k=>add(`knn-${k}`,`Weighted kNN ${k}`,'tetangga',c=>atlasKnn(c,k),14,3));
+  add('transform-family','Modular-Mirror Family Vote','transformasi',atlasTransform,14,3);
+  add('decision-tree','Decision Tree','pohon',c=>atlasTree(c,false,false),16,4);
+  add('random-forest','Deterministic Random Forest','pohon',c=>atlasTree(c,true,false),20,5);
+  add('gradient-boost','Gradient Boosted Stumps','boosting',c=>atlasTree(c,false,true),20,5);
+  add('neural-lite','Regularized Neural Logistic','jaringan saraf',atlasNeural,30,6);
+  add('bootstrap-mc','Bootstrap Monte Carlo Frequency','simulasi',atlasBootstrap,16,2);
+  return out;
+}
+function atlasApplicable(spec,ctx){return ctx.rows.length>=spec.minRows&&ctx.transitions.length>=spec.minTransitions;}
+function atlasPredictSpec(spec,ctx){return atlasSafeVector(spec.predict(ctx));}
+function atlasOutcome(rank,actual,size){
+  const chosen=new Set(rank.slice(0,size).map(r=>typeof r==='number'?r:r.digit)),truth=unique(actual.digits),miss=truth.filter(d=>!chosen.has(d)).length;
+  return {full:miss===0?1:0,catastrophic:miss>=2?1:0,miss,recall:(truth.length-miss)/Math.max(1,truth.length)};
+}
+function atlasMetric(outcomes){return {n:outcomes.length,full:sum(outcomes.map(o=>o.full)),catastrophic:sum(outcomes.map(o=>o.catastrophic)),meanMiss:mean(outcomes.map(o=>o.miss)),recall:mean(outcomes.map(o=>o.recall))};}
+function atlasQuality(m){if(!m?.n)return -1;return m.recall+.14*m.full/m.n-.20*m.catastrophic/m.n-.035*m.meanMiss;}
+function atlasAudit(rows,targetDay,specs){
+  const chrono=rows.slice().reverse(),events=[];
+  for(let i=12;i<chrono.length;i++){
+    const train=chrono.slice(0,i).reverse(),actual=chrono[i];if(inferTargetDay(train)!==actual.day)continue;
+    const ctx=atlasContext(train,actual.day),predictions={};
+    specs.forEach(spec=>{if(atlasApplicable(spec,ctx))predictions[spec.id]=atlasRank(atlasPredictSpec(spec,ctx));});
+    events.push({actual,predictions});
+  }
+  const targetEvents=events.filter(e=>e.actual.day===targetDay),recentTarget=targetEvents.slice(-3),models=specs.map(spec=>{
+    const summarize=list=>{const valid=list.filter(e=>e.predictions[spec.id]);return {4:atlasMetric(valid.map(e=>atlasOutcome(e.predictions[spec.id],e.actual,4))),5:atlasMetric(valid.map(e=>atlasOutcome(e.predictions[spec.id],e.actual,5))),6:atlasMetric(valid.map(e=>atlasOutcome(e.predictions[spec.id],e.actual,6)))};};
+    const target=summarize(targetEvents),recent=summarize(recentTarget),overall=summarize(events),n=target[6].n,reliability=n/(n+5),raw=.55*atlasQuality(target[6])+.25*atlasQuality(recent[6])+.20*atlasQuality(overall[6]),drift=Math.abs((target[6].recall||0)-(recent[6].recall||0)),selection=.52*(1-reliability)+reliability*raw-.10*drift;
+    return {spec,target,recent,overall,selection,drift};
+  }).filter(m=>m.overall[6].n>=4).sort((a,b)=>b.selection-a.selection||b.target[6].recall-a.target[6].recall||a.spec.id.localeCompare(b.spec.id));
+  return {events,targetEvents,recentTarget,models};
+}
+function atlasSelectModels(audit,currentPredictions){
+  const selected=[],families={},minimumTargetReplay=audit.targetEvents.length>=2?2:0;
+  for(const row of audit.models){if(!currentPredictions[row.spec.id]||row.target[6].n<minimumTargetReplay)continue;if((families[row.spec.family]||0)>=2)continue;selected.push(row);families[row.spec.family]=(families[row.spec.family]||0)+1;if(selected.length>=7)break;}
+  if(!selected.length){for(const row of audit.models){if(!currentPredictions[row.spec.id])continue;selected.push(row);if(selected.length>=5)break;}}
+  if(!selected.length)throw new Error('Tidak ada model yang sesuai dengan ukuran sampel.');
+  const lo=Math.min(...selected.map(m=>m.selection)),raw=selected.map(m=>.05+Math.max(0,m.selection-lo)),den=sum(raw)||1;
+  selected.forEach((m,i)=>m.weight=raw[i]/den);return selected;
+}
+function atlasEnsembleRank(predictions,selected){
+  const scores=Array(10).fill(0),used=selected.filter(m=>predictions[m.spec.id]),den=sum(used.map(m=>m.weight))||1;
+  used.forEach(m=>predictions[m.spec.id].forEach((row,index)=>scores[row.digit]+=(m.weight/den)*(10-index)/10));
+  return {scores,rank:atlasRank(scores)};
+}
+function atlasEnsembleReplay(audit,selected,targetDay){
+  const collect=list=>{const bySize={4:[],5:[],6:[]};list.forEach(event=>{const ensemble=atlasEnsembleRank(event.predictions,selected);[4,5,6].forEach(size=>bySize[size].push(atlasOutcome(ensemble.rank,event.actual,size)));});return {4:atlasMetric(bySize[4]),5:atlasMetric(bySize[5]),6:atlasMetric(bySize[6])};};
+  return {target:collect(audit.events.filter(e=>e.actual.day===targetDay)),recent:collect(audit.events.filter(e=>e.actual.day===targetDay).slice(-3)),overall:collect(audit.events)};
+}
+function atlasFrozenFormula(audit,currentPredictions,mainSix){
+  const pool=audit.models.filter(m=>currentPredictions[m.spec.id]).map(m=>{const six=currentPredictions[m.spec.id].slice(0,6).map(x=>x.digit);return {...m,distance:1-atlasJaccard(six,mainSix),orthogonalScore:m.selection+.24*(1-atlasJaccard(six,mainSix))};}).sort((a,b)=>b.orthogonalScore-a.orthogonalScore||a.spec.id.localeCompare(b.spec.id));
+  const chosen=[],families={};for(const row of pool){if((families[row.spec.family]||0)>=1)continue;chosen.push({...row,weight:1});families[row.spec.family]=1;if(chosen.length>=5)break;}
+  const den=chosen.length||1;chosen.forEach(m=>m.weight=1/den);const ensemble=atlasEnsembleRank(currentPredictions,chosen),outside=ensemble.rank.map(r=>r.digit).filter(d=>!mainSix.includes(d)),inside=ensemble.rank.map(r=>r.digit).filter(d=>mainSix.includes(d));
+  return {four:outside.slice(0,4),five:[...outside.slice(0,4),inside[0]],six:[...outside.slice(0,4),inside[0],inside[1]],rank:ensemble.rank,models:chosen};
+}
+function atlasCombinations(arr,k,start=0,prefix=[],out=[]){if(prefix.length===k){out.push(prefix.slice());return out;}for(let i=start;i<=arr.length-(k-prefix.length);i++)atlasCombinations(arr,k,i+1,[...prefix,arr[i]],out);return out;}
+function atlasSetAudit(set,rows){return atlasMetric(rows.map(row=>atlasOutcome(set.map(d=>({digit:d})),row,set.length)));}
+function atlasHybridPortfolio(mainSix,frozenFour,targetRows){
+  const recent=targetRows.slice(0,3),make=(mainCount,frozenCount)=>{
+    const list=[];atlasCombinations(mainSix,mainCount).forEach(a=>atlasCombinations(frozenFour,frozenCount).forEach(b=>{const digits=unique([...a,...b]);if(digits.length!==4)return;const all=atlasSetAudit(digits,targetRows),last=atlasSetAudit(digits,recent),score=.58*atlasQuality(all)+.42*atlasQuality(last);list.push({digits,all,recent:last,score});}));
+    const seen=new Set();return list.sort((a,b)=>b.score-a.score||b.all.full-a.all.full||a.digits.join('').localeCompare(b.digits.join(''))).filter(row=>{const key=row.digits.slice().sort().join('');if(seen.has(key))return false;seen.add(key);return true;}).slice(0,3);
+  };
+  return {threeOne:make(3,1),twoTwo:make(2,2)};
+}
+function atlasRepeatTwin(ctx,mainFour,mainFive,ensembleScores){
+  const target=ctx.targetRows,repeatRows=target.filter(r=>new Set(r.digits).size<4),latestRepeat=new Set(ctx.latest.digits).size<4,conditional=ctx.transitions.filter(tr=>(new Set(tr.source.digits).size<4)===latestRepeat),conditionalRepeats=conditional.filter(tr=>new Set(tr.target.digits).size<4).length,posterior=(1+(conditional.length?conditionalRepeats:repeatRows.length))/(2+(conditional.length?conditional.length:target.length)),active=target.length>=6&&conditional.length>=3&&posterior>=.55;
+  const pool=mainFive.map((digit,index)=>{
+    const targetEvents=target.filter(r=>r.digits.filter(d=>d===digit).length>=2).length,broadEvents=ctx.rows.filter(r=>r.digits.filter(d=>d===digit).length>=2).length;
+    const shapes=TWIN_SHAPES.map(([p,q,label])=>({label,n:target.filter(r=>r.digits[p]===digit&&r.digits[q]===digit).length,broad:ctx.rows.filter(r=>r.digits[p]===digit&&r.digits[q]===digit).length})).sort((a,b)=>b.n-a.n||b.broad-a.broad||a.label.localeCompare(b.label));
+    return {digit,pair:`${digit}${digit}`,targetEvents,broadEvents,bestShape:shapes[0],score:5*targetEvents+broadEvents+2*(ensembleScores[digit]||0)-.1*index};
+  }).sort((a,b)=>b.score-a.score||a.digit-b.digit),choices=pool.slice(0,2).map((r,i)=>({...r,choice:i+1})),boundary=choices.some(c=>c.digit===mainFive[4]&&!mainFour.includes(c.digit));
+  return {choices,active,posterior,events:repeatRows.length,total:target.length,conditionalEvents:conditional.length,conditionalRepeats,boundaryActive:active&&boundary,status:active?'AKTIF TERBATAS':'TIDAK AKTIF'};
+}
+function atlasPositionRanks(ctx,ensembleScores){
+  return POS.map((_,p)=>atlasRank(DIGITS.map(d=>{
+    const target=ctx.targetRows,base=(1+target.filter(r=>r.digits[p]===d).length)/(10+target.length),matches=ctx.transitions.filter(tr=>tr.source.digits[p]===ctx.latest.digits[p]),markov=(1+matches.filter(tr=>tr.target.digits[p]===d).length)/(10+matches.length);return .50*base+.35*markov+.15*(ensembleScores[d]||0);
+  })));
+}
+function atlasPairChoices(left,right,allowed){
+  const ok=new Set(allowed),pairs=[];left.forEach((a,ia)=>right.forEach((b,ib)=>{if(ok.has(a.digit)&&ok.has(b.digit))pairs.push({pair:`${a.digit}${b.digit}`,score:a.score+b.score-.025*(ia+ib)});}));
+  const seen=new Set();return pairs.sort((a,b)=>b.score-a.score||a.pair.localeCompare(b.pair)).filter(p=>{if(seen.has(p.pair))return false;seen.add(p.pair);return true;}).slice(0,5);
+}
+function atlasMonteCarlo(scores,rows,runs=2000){
+  let seed=rows.reduce((z,r)=>mod10(z+sum(r.digits))+31*z,17)>>>0;const random=()=>{seed=(1664525*seed+1013904223)>>>0;return seed/4294967296;},counts=Array(10).fill(0),weights=scores.map(v=>Math.max(.01,v));
+  for(let n=0;n<runs;n++){const available=DIGITS.slice(),w=weights.slice();for(let k=0;k<6;k++){const total=sum(available.map(d=>w[d])),r=random()*total;let acc=0,pick=available[0];for(const d of available){acc+=w[d];if(r<=acc){pick=d;break;}}counts[pick]++;available.splice(available.indexOf(pick),1);}}
+  return counts.map(c=>c/runs);
+}
+function atlasWindowStability(rows,targetDay,selected){
+  const sets=[20,30,50].filter(n=>rows.length>=n).map(n=>{const ctx=atlasContext(rows.slice(0,n),targetDay),pred={};selected.forEach(m=>{if(atlasApplicable(m.spec,ctx))pred[m.spec.id]=atlasRank(atlasPredictSpec(m.spec,ctx));});return {n,digits:atlasEnsembleRank(pred,selected).rank.slice(0,6).map(r=>r.digit)};}),pairs=[];
+  for(let i=0;i<sets.length;i++)for(let j=i+1;j<sets.length;j++)pairs.push(atlasJaccard(sets[i].digits,sets[j].digits));return {sets,score:mean(pairs)};
+}
+function atlasStatus(replay,stability,frontierMargin){
+  const pass={};[4,5,6].forEach(size=>{const m=replay.target[size],baseline=size/10;pass[size]=m.n>=5&&m.recall>=baseline+.035&&m.catastrophic<=Math.ceil(.55*m.n)&&(size===6||m.full>=1);});
+  const active=Object.keys(pass).filter(k=>pass[k]).map(Number),status=pass[6]?(pass[4]&&pass[5]?'4D/5D/6D AKTIF TERBATAS':pass[5]?'5D/6D AKTIF TERBATAS — 4D BELUM LOLOS':'6D AKTIF TERBATAS — 4D/5D BELUM LOLOS'):'SEMUA TANGGA BELUM LOLOS — OUTPUT EKSPLORATIF',frontier=stability.score>=.65&&frontierMargin>=.03?'CUKUP STABIL':'TIDAK STABIL';
+  const confidence=replay.target[6].n>=6&&replay.target[6].recall>=.68&&replay.target[6].catastrophic/Math.max(1,replay.target[6].n)<=.35&&frontier==='CUKUP STABIL'?'MENENGAH':'RENDAH';return {pass,active,status,frontier,confidence};
+}
+function buildAtlasPrediction(inputRows){
+  const market=inputRows[0]?.code||'',rows=inputRows.filter(r=>!market||r.code===market),targetDay=inferTargetDay(rows),ctx=atlasContext(rows,targetDay),specs=atlasModelSpecs(),currentPredictions={};
+  specs.forEach(spec=>{if(atlasApplicable(spec,ctx))currentPredictions[spec.id]=atlasRank(atlasPredictSpec(spec,ctx));});
+  const audit=atlasAudit(rows,targetDay,specs),selected=atlasSelectModels(audit,currentPredictions),ensemble=atlasEnsembleRank(currentPredictions,selected),mainSix=ensemble.rank.slice(0,6).map(r=>r.digit),mainFive=mainSix.slice(0,5),mainFour=mainSix.slice(0,4),frozen=atlasFrozenFormula(audit,currentPredictions,mainSix),replay=atlasEnsembleReplay(audit,selected,targetDay),hybrids=atlasHybridPortfolio(mainSix,frozen.four,ctx.targetRows),twin=atlasRepeatTwin(ctx,mainFour,mainFive,ensemble.scores),positionRanks=atlasPositionRanks(ctx,ensemble.scores),ak=atlasPairChoices(positionRanks[0],positionRanks[1],mainSix),le=atlasPairChoices(positionRanks[2],positionRanks[3],mainSix),monteCarlo=atlasMonteCarlo(ensemble.scores,rows),stability=atlasWindowStability(rows,targetDay,selected),frontierMargin=(ensemble.rank[5]?.score||0)-(ensemble.rank[6]?.score||0),classification=atlasStatus(replay,stability,frontierMargin);
+  return {engine:'atlas500',market,targetDay,rows,ctx,catalog:ATLAS_CATEGORIES,specs,currentPredictions,audit,selected,ensemble,main:{four:mainFour,five:mainFive,six:mainSix},frozen,hybrids,twin,positionRanks,ak,le,monteCarlo,stability,frontierMargin,replay,classification,eligibleModels:audit.models.filter(m=>m.target[6].n>=2).length};
+}
+
+/* Deklarasi terakhir sengaja menjadi pintu utama aplikasi. Mesin V13.34 tetap
+   berada di berkas sebagai pembanding historis, tetapi tidak lagi menentukan
+   output V14.00. */
+function buildPrediction(inputRows){return buildAtlasPrediction(inputRows);}
+
+function atlasPct(value){return `${(100*(Number(value)||0)).toFixed(1)}%`;}
+function atlasMetricLine(label,m){return `<div class="atlas-metric"><b>${label}</b><span>recall ${atlasPct(m.recall)} • full ${m.full}/${m.n} • catastrophic ${m.catastrophic}/${m.n} • mean miss ${m.meanMiss.toFixed(2)}</span></div>`;}
+function atlasHybridCards(items){return `<div class="atlas-hybrid-grid">${items.map((row,i)=>`<div class="atlas-hybrid"><small>#${i+1}</small><b>${row.digits.join('')}</b><span>semua ${atlasPct(row.all.recall)} • terbaru ${atlasPct(row.recent.recall)} • full ${row.all.full}/${row.all.n}</span></div>`).join('')}</div>`;}
+function atlasMethodRows(rows){return `<div class="atlas-methods">${rows.map((m,i)=>`<div><span>${i+1}</span><p><b>${m.spec.label}</b><small>${m.spec.family} • bobot ${atlasPct(m.weight)} • target 6D ${atlasPct(m.target[6].recall)} • ${m.target[6].n} replay</small></p></div>`).join('')}</div>`;}
+function renderResult(r){
+  if(r.engine!=='atlas500')return;
+  $('output').className='result';if($('modelPill'))$('modelPill').textContent='Formula Atlas 500 • Walk-Forward';const repeatNote=r.twin.active?`Repeat gate ${atlasPct(r.twin.posterior)} • aktif terbatas`:`Repeat gate ${atlasPct(r.twin.posterior)} • tidak aktif`,catalogTotal=sum(r.catalog.map(c=>c.count));
+  $('output').innerHTML=`
+    <div class="atlas-summary">
+      <span class="mini-title">Formula Atlas Scan • ${r.market||'-'} → ${r.targetDay}</span>
+      <h3>Ringkasan Akhir ${r.market||'-'}</h3>
+      <div class="atlas-route"><b>${r.classification.status}</b><span>${r.classification.frontier} • keyakinan ${r.classification.confidence}</span></div>
+      <div class="atlas-ladder main-ladder"><div><small>UTAMA 6D</small>${digitCards(r.main.six,'ladder-six-digit')}</div><div><small>UTAMA 5D</small>${digitCards(r.main.five,'strong-five')}</div><div><small>UTAMA 4D</small>${digitCards(r.main.four,'core-four-digit')}</div></div>
+      <div class="atlas-ladder frozen-ladder"><div><small>BEKU 6D</small>${digitCards(r.frozen.six,'backup-digit')}</div><div><small>BEKU 5D</small>${digitCards(r.frozen.five,'backup-digit')}</div><div><small>BEKU 4D • ortogonal terhadap UTAMA 6D</small>${digitCards(r.frozen.four,'backup-digit')}</div></div>
+    </div>
+    <section class="atlas-card"><div class="atlas-card-head"><div><small>Seleksi formula dinamis</small><b>${catalogTotal} metode dipetakan • ${r.specs.length} kandidat dapat dieksekusi</b></div><span>${r.eligibleModels} memiliki replay target-day</span></div><p>Metode tidak memperoleh suara hanya karena namanya tersedia. Kandidat harus sesuai ukuran sampel, dihitung tanpa hasil masa depan, lalu dipilih dari recall, full containment, catastrophic miss, drift terbaru, dan keragaman keluarga.</p>${atlasMethodRows(r.selected)}</section>
+    <section class="atlas-card"><div class="atlas-card-head"><div><small>Walk-forward ensemble</small><b>Audit tangga UTAMA</b></div><span>${r.replay.target[6].n} replay ${r.targetDay}</span></div><div class="atlas-metric-grid">${atlasMetricLine('4D',r.replay.target[4])}${atlasMetricLine('5D',r.replay.target[5])}${atlasMetricLine('6D',r.replay.target[6])}</div><div class="atlas-window"><b>Stabilitas jendela</b><span>${r.stability.sets.map(s=>`${s.n}: ${s.digits.join(' ')}`).join(' • ')||'belum cukup tiga jendela'} • skor ${atlasPct(r.stability.score)}</span></div><div class="atlas-window"><b>Monte Carlo ketidakpastian</b><span>inklusi tertinggi ${atlasRank(r.monteCarlo).slice(0,6).map(x=>`${x.digit}:${atlasPct(x.score)}`).join(' • ')} • tidak menambah bukti baru</span></div></section>
+    <section class="atlas-card"><div class="atlas-card-head"><div><small>Formula gabungan</small><b>Tiga utama + satu beku</b></div><span>replay tetap pada hari target</span></div>${atlasHybridCards(r.hybrids.threeOne)}<div class="atlas-subhead">Dua utama + dua beku</div>${atlasHybridCards(r.hybrids.twoTwo)}<p>Gabungan adalah jembatan dua formula. Nilainya diaudit terpisah dan tidak dihitung sebagai kemenangan UTAMA maupun BEKU.</p></section>
+    <section class="atlas-card twin-atlas"><div class="atlas-card-head"><div><small>Repeat dan kembar</small><b>${r.twin.status}</b></div><span>${repeatNote}</span></div><div class="twin-choice-grid">${r.twin.choices.map(c=>`<div class="twin-choice"><small>pilihan ${c.choice} • target ${c.targetEvents}, seluruh ${c.broadEvents}</small><b>${c.pair}</b><span>${c.bestShape.label} • posisi belum dikunci</span></div>`).join('')}</div><p>Kembar aktual hari ${r.targetDay}: ${r.twin.events}/${r.twin.total}. Kondisi sumber serupa: ${r.twin.conditionalRepeats}/${r.twin.conditionalEvents}. Kembar Batas 5D: <b>${r.twin.boundaryActive?'AKTIF TERBATAS':'TIDAK AKTIF'}</b>.</p></section>
+    <section class="atlas-card"><div class="atlas-card-head"><div><small>AKLE position-first</small><b>Terkunci ke enam digit UTAMA</b></div><span>bukan jaminan posisi</span></div><div class="akle-grid"><div><small>5 Pilihan AK</small>${pairCards(r.ak,'ak')}</div><div><small>5 Pilihan LE</small>${pairCards(r.le,'le')}</div></div></section>
+    <section class="atlas-final"><h4>Ringkasan Paling Singkat</h4><p><b>UTAMA 4D:</b> ${r.main.four.join(' ')}</p><p><b>UTAMA 5D:</b> ${r.main.five.join(' ')}</p><p><b>UTAMA 6D:</b> ${r.main.six.join(' ')}</p><p><b>BEKU 4D:</b> ${r.frozen.four.join(' ')}</p><p><b>BEKU 5D:</b> ${r.frozen.five.join(' ')}</p><p><b>BEKU 6D:</b> ${r.frozen.six.join(' ')}</p><p><b>GABUNGAN 3+1:</b> ${r.hybrids.threeOne.map(x=>x.digits.join('')).join(', ')}</p><p><b>GABUNGAN 2+2:</b> ${r.hybrids.twoTwo.map(x=>x.digits.join('')).join(', ')}</p><p><b>Kembar:</b> ${r.twin.choices.map(x=>x.pair).join(' dan ')}</p><p><b>Kembar Batas 5D:</b> ${r.twin.boundaryActive?'AKTIF TERBATAS':'TIDAK AKTIF'}</p><p><b>AK:</b> ${r.ak.map(x=>x.pair).join(', ')}</p><p><b>LE:</b> ${r.le.map(x=>x.pair).join(', ')}</p><p><b>Status:</b> ${r.classification.status}</p><p><b>Frontier:</b> ${r.classification.frontier}</p><p><b>Keyakinan:</b> ${r.classification.confidence}</p></section>
+    <div class="formula-integrity-note">4D ⊂ 5D ⊂ 6D dijaga otomatis. BEKU 4D adalah empat digit di luar UTAMA 6D; kursi kelima dan keenam BEKU berasal dari formula ortogonal terbaik. Semua evaluasi bersifat historis dan tidak dapat memastikan hasil acak berikutnya.</div>`;
+}
+
+if(typeof module!=='undefined'&&module.exports)module.exports={parseRows,buildPrediction,buildAtlasPrediction,atlasModelSpecs,atlasAudit,atlasContext,buildLegacyPrediction,buildDynamicBayesianLedger,buildDominanceSwapCandidate,buildDynamicStatisticalAudit,calibrateTwinPortfolioByActualRepeats,buildCorePrediction,buildFormulaRelationRun,selectLocalProfile,buildBalancedEcologyPortfolio,buildPositionFormulaLedger,buildFormulaEvidenceLadder,buildIndependentRelationLattice,buildCrossRouteConcentrationLadder,buildHistoryConditionedIndependentLadder,buildTargetDayRecurrenceLedger,buildLagTargetDayRelationLedger,buildTargetDayMarginalLedger,buildTargetDayRecurrenceBridge,buildDuplicateSourceTargetDayBridge,buildDominantTargetDayBridge,buildStructuralTargetDayCoreBridge,buildSplitEvidenceRepeatPositionBridge,buildStructuralTargetDayAnchorRestoration,buildTargetPositionBoundaryRetention,buildStructuralReplayLossRecovery,buildNearTieTargetCoverage,buildMiddlePositionTargetDayRecovery,buildReplayKCounterRouteGuard,buildReplayIndependentTargetCarryTwinRecovery,buildTargetTwinCrossRouteRecovery,buildPositionBoundaryTargetTwinRecovery,buildDualRouteDigitCoverageRecovery,buildStrongWinCounterRouteHedgeRecovery,buildNearParitySparseOverlapRecovery,buildLongHorizonEchoRecovery,buildRepeatedSourceNeighborCarryRecovery,buildSourceTwinMirrorRecovery,buildNearParityTwoStepUnionRecovery,buildCurrentActiveSetEvidence,buildStructuralConsensusCarryRecovery,buildOrthogonalHorizonSplitRecovery,buildCollapsedUniverseOrthogonalRecovery,needsIndependentRelationRoute,weightedRouteReplay,chooseFormulaRoute,buildWeakPositionTieSeat,buildFormulaHedge,buildPureFormulaReserve,buildCounterRouteHedge,applyTargetDayHedgeBridge,buildPairBalanceBoundarySeat,promotePairBalanceCore,buildTwinPortfolio,applyReplayTargetCarryTwin,applyTargetTwinCrossRouteTwin,applyPositionBoundaryTargetTwin,applySourceTwinMirrorTwin,applyTargetDayTwinBridge,buildIndependentTwinPortfolio,applyStructuralTargetTwinSpecialist,applyCollapsedUniverseTwinAudit,renderResult,inferTargetDay,transitionsFor,formulaLibrary,pairBalanceFormulaLibrary,LOCAL_PROFILES,ATLAS_CATEGORIES};

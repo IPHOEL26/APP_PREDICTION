@@ -4,22 +4,22 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IPHOEL PREDICTION</title>
-  <link rel="stylesheet" href="style.css?v=13.34" />
+  <link rel="stylesheet" href="style.css?v=14.00" />
 </head>
 <body>
   <div class="app-shell">
     <header class="hero">
       <div class="brand-row"><span class="brand-mark">∑</span><h1>IPHOEL PREDICTION</h1></div>
-      <div class="version-pill" id="versionPill">IPHOEL Formula Engine V13.34 • Dynamic Bayesian Audit</div>
+      <div class="version-pill" id="versionPill">IPHOEL Formula Engine V14.00 • Formula Atlas 500</div>
     </header>
     <section class="notice">
-      <b>Dynamic Bayesian Audit:</b> seluruh jalur formula lama tetap dipindai, lalu batas utama–cadangan ditantang oleh bukti Bayes/Dirichlet, transisi Markov, kemiripan Jaccard–Hamming, co-occurrence, dan kestabilan waktu. Penantang hanya boleh mengubah tangga bila menang pada replay target-day dan replay lintas-hari tanpa menambah catastrophic miss. Formula yang runtuh ke nilai sama hanya memperoleh satu suara keluarga. Cadangan diurutkan sebagai bukti ortogonal di luar 6D, sedangkan kembar dikalibrasi terhadap kejadian repeat aktual dan tetap diberi label keyakinan. <b>Pagar 4D ⊂ 5D ⊂ 6D dan AKLE terkunci ke 6D</b> tetap aktif. Nama market, digit tertentu, serta hasil yang belum masuk data tidak menjadi rumus.
+      <b>Formula Atlas 500:</b> katalog 500 metode dipetakan ke keluarga transformasi, statistik, probabilitas, tren, deret waktu, regresi, pembelajaran mesin, simulasi, pola digit, dan evaluasi. Hanya model yang sesuai dengan data diskret 4 digit dan lolos walk-forward tanpa melihat hasil masa depan yang boleh ikut ensemble. Metode yang membutuhkan sampel lebih besar akan ditandai tidak layak, bukan dipaksakan. <b>UTAMA, BEKU, gabungan 3+1/2+2, kembar, serta AK/LE diaudit terpisah.</b> Hasil adalah pembacaan historis dengan ketidakpastian, bukan jaminan keluaran.
     </section>
     <main class="layout">
       <section class="panel input-panel">
         <div class="panel-head"><div><span class="mini-title">Data Historis</span><h2>Input Keluaran</h2></div><span class="pill muted" id="rowCounter">0 baris</span></div>
         <div class="scanner-frame" id="scannerFrame">
-          <textarea id="dataInput" spellcheck="false" placeholder="Tempel 50–56 baris satu market. Baris terbaru boleh berada di atas."></textarea>
+          <textarea id="dataInput" spellcheck="false" placeholder="Tempel 20–56 baris satu market. Baris terbaru boleh berada di atas."></textarea>
           <div class="history-scan-overlay" aria-hidden="true"><span class="scan-edge scan-edge-left"></span><span class="scan-edge scan-edge-right"></span><span class="scan-beam"></span></div>
         </div>
         <div class="scanner-console" aria-live="polite">
@@ -30,11 +30,11 @@
         <div class="single-action"><button class="btn danger" id="btnClear">Reset / Bersihkan</button></div>
       </section>
       <section class="panel output-panel">
-        <div class="panel-head"><div><span class="mini-title">Output Formula</span><h2>Hasil Pembacaan</h2></div><span class="pill" id="modelPill">Replay-Routed Formula Ladder</span></div>
+        <div class="panel-head"><div><span class="mini-title">Output Formula</span><h2>Hasil Pembacaan</h2></div><span class="pill" id="modelPill">Formula Atlas 500 • Walk-Forward</span></div>
         <div id="output" class="empty-state"><div><div class="empty-icon">Φ</div><h3>Belum ada data</h3><p>Tempel data historis. Analisis berjalan otomatis.</p></div></div>
       </section>
     </main>
   </div>
-  <script src="script.js?v=13.34"></script>
+  <script src="script.js?v=14.00"></script>
 </body>
 </html>
